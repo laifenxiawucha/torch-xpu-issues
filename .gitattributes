@@ -1,0 +1,2 @@
+# Preserve whitespace in imported CSV field values, including upstream titles.
+*.csv -whitespace
