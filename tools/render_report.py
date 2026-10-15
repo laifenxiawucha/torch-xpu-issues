@@ -14,6 +14,8 @@ def clean(value):
 def compact(value,limit=500):return re.sub(r'\s+',' ',clean(value or '')).strip()[:limit]
 def match(pattern,text):return bool(re.search(pattern,text,re.I))
 def extract(pattern,text,limit=12):return list(dict.fromkeys(re.findall(pattern,text,re.I)))[:limit]
+def explicit_source_paths(text):
+ return extract(r'(?:(?:aten|csrc|src|include|torch|sycl|kernels)/[\w./-]+\.(?:cpp|cuh|cu|cc|c|hpp|h|sycl))\b',text,50)
 def bucket(days):return '>365' if days>365 else '181-365' if days>180 else '91-180' if days>90 else '31-90' if days>30 else '0-30'
 def encode(value):return json.dumps(clean(value),ensure_ascii=False,separators=(',',':')).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
 def classify(title,body,labels):
@@ -74,7 +76,7 @@ def render(raw,root):
   blocker,blocker_evidence=blocker_info(labels,last['text'] if last else '')
   skip=any(x.startswith('skipped') for x in label_list);regression='regression' in label_list
   paths=extract(r'(?:test[/\\][\w./\\-]+\.py|\btest_[\w]+\.py)(?:::[\w.\[\],=:+-]+)*',title+'\n'+body,100)
-  source_paths=extract(r'(?:(?:aten|csrc|src|include|torch|sycl|kernels)/[\w./-]+\.(?:cpp|cc|c|h|hpp|sycl))',title+'\n'+body,50)
+  source_paths=explicit_source_paths(title+'\n'+body)
   apis=extract(r'\b(?:aten::[A-Za-z_][\w]*|symm_mem::[A-Za-z_][\w]*|torch\.(?:[A-Za-z_][\w]*\.)*[A-Za-z_][\w]*)',title+'\n'+body[:4000],8)
   version=extract(r'PyTorch version:\s*([^\n]+)',body,1);reported_os=extract(r'(?m)^OS:\s*([^\n]+)',body,1)
   hardware='; '.join(l[4:] for l in label_list if l.startswith('hw: ')) or '; '.join(extract(r'\b(?:PVC|BMG|LNL|MTL|ARL|DG2|PTL)\b',title))

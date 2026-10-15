@@ -1,7 +1,7 @@
 import unittest,json,tempfile
 from pathlib import Path
 from issue_facts import classify_impact,record_nature,discovery_channels,reproduction_clues,repair_summary,blocker_info,verification_candidates
-from render_report import load_overrides,classify
+from render_report import load_overrides,classify,explicit_source_paths
 class IssueFactsTests(unittest.TestCase):
  def test_unit_failure_is_not_infrastructure_failure(self):
   self.assertEqual(classify_impact('test_topk.py returns wrong indices','test: ut'),['正确性'])
@@ -47,6 +47,8 @@ class IssueFactsTests(unittest.TestCase):
  def test_verification_plan_is_not_completed_validation(self):
   comments=[{'is_bot':False,'text':'Please verify on next weekly build','created_at':'2026-10-15','author':'person'},{'is_bot':False,'text':'Verified with pt28, this issue still exists.','created_at':'2026-10-14','author':'person'}]
   result=verification_candidates(comments);self.assertEqual(len(result),1);self.assertIn('still exists',result[0]['excerpt'])
+ def test_source_path_extensions_are_not_truncated(self):
+  self.assertEqual(explicit_source_paths('aten/src/native/cuda/Copy.cu and src/kernel.cuh and torch/example.cpp'),['aten/src/native/cuda/Copy.cu','src/kernel.cuh','torch/example.cpp'])
  def test_override_requires_attribution_and_valid_fields(self):
   with tempfile.TemporaryDirectory() as folder:
    path=Path(folder)/'overrides.json';path.write_text(json.dumps({'schema_version':1,'issues':{'1':{'set':{'surface_scope':'算子/kernel'}}}}))
