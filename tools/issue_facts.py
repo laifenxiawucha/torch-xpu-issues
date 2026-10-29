@@ -6,6 +6,28 @@ IMPACT_TYPES=['正确性','性能','崩溃/稳定性','算子/API 不支持','�
 def found(pattern,text):
  return bool(re.search(pattern,text,re.I|re.M))
 
+def reported_versions(body):
+ """Separate explicit report environments from comparison baselines."""
+ reported=[];baseline=[];ambiguous=[];section='';pending=False
+ pattern=re.compile(r'(?i)(?:PyTorch(?: version)?\s*[:=]\s*`?|torch\s*==\s*|\[pip3\]\s*torch\s+)(2\.\d+[^\s`<>,;)]*)')
+ for line in body.splitlines():
+  if re.match(r'^\s*#{1,6}\s',line):section=line.lower()
+  context=(line+' '+section).lower()
+  values=pattern.findall(line)
+  if not values and re.search(r'baseline|target|current|reported|基线|目标',line,re.I):
+   values+=re.findall(r'(?i)(?:release/|PyTorch\s+|\bPT)(2\.\d+(?:\.\d+)?)',line)
+  if pending:
+   values+=re.findall(r'^\s*`?(2\.\d+[^\s`<>,;)]*)',line)
+   if line.strip():pending=False
+  if re.fullmatch(r'\s*(?:#{1,6}\s*)?pytorch(?: version)?\s*:?\s*',line,re.I):pending=True
+  for value in values:
+   if re.search(r'baseline|comparison|reference version|previous version|last (?:good|passing)|对比|基线',line,re.I):target=baseline
+   elif re.search(r'baseline|comparison|previous version',section,re.I) and not re.search(r'target|current|reported',line,re.I):target=baseline
+   elif re.search(r'PyTorch(?: version)?\s*[:=]|\[pip3\]|target|current|reported|environment|versions?|目标|环境',context,re.I):target=reported
+   else:target=ambiguous
+   if value not in target:target.append(value)
+ return {'reported':reported,'baseline':baseline,'ambiguous':ambiguous}
+
 def classify_impact(title,labels,body=''):
  text=title+' '+labels
  rules=[
@@ -60,7 +82,7 @@ def reproduction_clues(body,test_paths,reported_version,markdown=''):
  gaps=[]
  if not test_paths:gaps.append('未提取到测试入口')
  if not code_present:gaps.append('未提取到代码片段')
- if not reported_version:gaps.append('报告版本未注明')
+ if not reported_version:gaps.append('未提取到报告版本')
  return {'repro_materials':'；'.join(materials) or '未提取到上述材料','repro_gaps':'；'.join(gaps) or '入口、代码、报告版本均有线索','repro_code_present':'1' if code_present else '0','repro_commands':'\n'.join(commands[:8]),'repro_code_excerpt':'\n'.join(code_lines[:16]) if code_present else '', 'repro_code_blocks':blocks,'latest_verified_version':'未确认'}
 
 def verification_candidates(comments):

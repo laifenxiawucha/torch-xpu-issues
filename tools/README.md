@@ -31,6 +31,8 @@ python tools/update_report.py --output-dir .
 ## 文件职责
 
 - `update_report.py`：GitHub 只读采集、分页和集合验证。
+- `case_inventory.py`：声明清单、多种 pytest 标识、人工 Markdown 结果表、显式迁移别名和解析覆盖。
+- `evidence_context.py`：运行编号、workflow / 分支 / 平台范围的核对。
 - `closure_review.py`：可解析用例清单、逐项处理证据、关闭候选原因、未完成事项与目标版本核对。
 - `issue_facts.py`：问题表现、记录性质、发现渠道、材料和验证候选线索。
 - `render_report.py`：分类、去重 PR、人工更正、CSV 与 HTML 输出。
@@ -105,3 +107,13 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 ```
 
 新增检查覆盖关闭审查计数、排序、分享、逐项懒加载、已知正反例、输入与撤销竞争、多选图表、失效分享条件、剪贴板拒绝、PR 汇总和桌面偏好保存。
+
+## 关联与证据校验补充
+
+- issue 的 PR 集合取时间线引用与所有已采集 PR 的 `closingIssuesReferences` 反向索引的并集。验证脚本独立逐条核对反向关闭引用，避免同一套渲染逻辑自证。
+- 采集完整评论 Markdown 和记录 ID；查询正文及 nightly 评论引用的 Actions run，保存公开 workflow、分支与 commit。不可访问的运行记录保留未知。整体 run 失败不意味着其中每个用例失败。
+- 配置核对独立于用例通过状态。workflow / 分支不同、硬件或系统范围未覆盖、目标 release 未确认时，候选保持待确认。
+- 正式 Cases / Affected Cases 区段优先，区段前的日志不进入清单；支持 `.py::Class::test`、`module::Class.test`、CSV 与人工结果表。标题数量、无法解析项、显式部分清单共同决定覆盖。类名迁移仅在评论明确说明文件迁移且对应关系唯一时合并，并保留别名。
+- “相关问题”“split from”“follow-up to”“另一个用例由其他 issue 跟踪”不证明当前任务已转移。明确重复、当前剩余任务转移及完整逐项处理分别记录。
+- 每个用例的证据截取其名称附近的上下文，保留评论 ID、完整时间戳及运行编号。报告版本、对比基线和其他版本线索分别展示；无法提取时使用“未提取到”。
+- 已接受的分享搜索完整恢复；旧版链接未指定每页数量时固定使用 10 条，独立于接收者偏好。

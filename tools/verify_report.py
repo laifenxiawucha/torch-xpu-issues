@@ -26,8 +26,14 @@ def verify(html,snapshot):
   assert detail['body_markdown']==clean(i.get('body',''))
   if not detail['body_markdown']:assert detail['body_text']==clean(i['bodyText'])
   for actual,expected in zip(detail['comments'],i['comments']['nodes']):assert actual['text']==clean(expected['bodyText'])
+  for actual,expected in zip(detail['comments'],i['comments']['nodes']):assert actual['markdown']==clean(expected.get('body',''))
   linked=[dict(data['prs'][p['id']],explicit=p['explicit_fix_reference']) for p in r['linked_prs']]
   assert int(r['explicit_fix_pr_count'])+int(r['cross_reference_pr_count'])==len(linked)
+  # Independent reverse check: every already-fetched PR closing this issue must
+  # appear, even when GitHub's issue timeline has no cross-reference event.
+  for pr in source['prs']:
+   closes=any(x['number']==i['number'] and x['repository']['nameWithOwner']=='intel/torch-xpu-ops' for x in pr['closingIssuesReferences']['nodes'])
+   if closes:assert any(p['id']==pr['id'] and p['explicit'] for p in linked),'Missing reverse closing reference: '+r['issue']
   assert (r['pr_ci_failed']=='1')==any(p['explicit'] and p['state']=='OPEN' and p['checks'] in ['FAILURE','ERROR'] for p in linked)
   assert r['primary_blocker'] not in ['公开记录未显示负责人','长期没有公开进展']
   if r['classification_review']=='未人工核查':assert r['latest_verified_version']=='未确认'
@@ -40,6 +46,12 @@ def verify(html,snapshot):
   if closure['status']=='优先审查关闭':
    assert closure['inventory_complete'] and closure['total']>0
    assert closure['disposed']==closure['total'] and not closure['blockers'] and not closure['counts']['skipped']
+   assert not closure['configuration']['checks'],'Priority requires matching configuration evidence'
+  for case in closure['cases']:
+   if case['status']=='passed':
+    name=case['name'].split(',')[-1].split('::')[-1]
+    if '.test_' in name:name=name.split('.test_',1)[1];name='test_'+name
+    assert name in case['evidence'][-1]['excerpt'],'Per-case excerpt must identify its case'
   for status,count in closure['counts'].items():assert int(r['closure_case_'+status])==count
  parser=Markup();parser.feed(text);assert len(parser.ids)==len(set(parser.ids)),'Duplicate HTML IDs'
  csvpath=html.parent/f"torch-xpu-ops-issue-inventory-{data['snapshot']}.csv"

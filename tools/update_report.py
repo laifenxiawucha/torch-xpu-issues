@@ -2,6 +2,8 @@
 """Read-only GitHub snapshot collector. Uses the existing gh authentication."""
 import argparse,csv,json,re,subprocess,os,time
 from closure_review import followup_references
+from evidence_context import execution_refs
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime,timezone
 ROOT=Path(__file__).resolve().parent.parent
@@ -11,7 +13,7 @@ QUERY='''query($cursor:String) { repository(owner:"intel",name:"torch-xpu-ops") 
  totalCount pageInfo {hasNextPage endCursor} nodes {
  id number title body bodyText createdAt updatedAt state author {login __typename}
  labels(first:100){totalCount nodes{name}} assignees(first:100){totalCount nodes{login}}
- milestone{title dueOn state} comments(last:50){totalCount pageInfo{hasPreviousPage startCursor} nodes{createdAt body bodyText author{login __typename}}}
+ milestone{title dueOn state} comments(last:50){totalCount pageInfo{hasPreviousPage startCursor} nodes{id createdAt body bodyText author{login __typename}}}
  timelineItems(last:50,itemTypes:[CROSS_REFERENCED_EVENT,REOPENED_EVENT]){
  totalCount pageInfo{hasPreviousPage startCursor} nodes{
  __typename ... on CrossReferencedEvent{createdAt source{__typename ... on PullRequest{id number title state mergedAt updatedAt repository{nameWithOwner}}}}
@@ -79,7 +81,7 @@ def collect():
   for key in ['labels','assignees']:
    assert issue[key]['totalCount']==len(issue[key]['nodes']), 'Truncated '+key+' connection; update collector before publishing.'
   # Complete truncated comment and timeline connections rather than silently missing evidence.
-  for key,selection in [('comments','createdAt body bodyText author{login __typename}'),('timelineItems','__typename ... on CrossReferencedEvent{createdAt source{__typename ... on PullRequest{id number title state mergedAt updatedAt repository{nameWithOwner}}}} ... on ReopenedEvent{createdAt}')]:
+  for key,selection in [('comments','id createdAt body bodyText author{login __typename}'),('timelineItems','__typename ... on CrossReferencedEvent{createdAt source{__typename ... on PullRequest{id number title state mergedAt updatedAt repository{nameWithOwner}}}} ... on ReopenedEvent{createdAt}')]:
    connection=issue[key]
    while connection['pageInfo']['hasPreviousPage']:
     args=',itemTypes:[CROSS_REFERENCED_EVENT,REOPENED_EVENT]' if key=='timelineItems' else ''
@@ -105,7 +107,31 @@ def collect():
  CACHE.mkdir(parents=True,exist_ok=True)
  (CACHE/'collection-checkpoint.json').write_text(json.dumps(raw,ensure_ascii=False))
  raw['review_targets']=collect_review_targets(raw)
+ raw['workflow_runs']=collect_workflow_runs(raw)
  return raw
+
+def collect_workflow_runs(raw):
+ refs=set()
+ for issue in raw['issues']:
+  refs.update(execution_refs(issue.get('body') or issue['bodyText']))
+  for comment in issue['comments']['nodes']:
+   if 'Passed in' in comment['bodyText'] and 'nightly testing' in comment['bodyText']:
+    refs.update(execution_refs(comment.get('body') or comment['bodyText']))
+ def fetch(ref):
+  repo,run=ref.split('@run:');env=os.environ.copy();env.pop('GH_DEBUG',None)
+  for attempt in range(3):
+   proc=subprocess.run(['gh','api',f'repos/{repo}/actions/runs/{run}'],text=True,capture_output=True,env=env,timeout=35)
+   if not proc.returncode:
+    data=json.loads(proc.stdout)
+    return ref,{'reference':ref,'available':True,'repository':repo,'run_id':run,'name':data['name'],'path':data['path'],'branch':data['head_branch'],'commit':data['head_sha'],'conclusion':data['conclusion'],'event':data['event'],'created_at':data['created_at']}
+   if '404' in proc.stderr or '403' in proc.stderr:
+    return ref,{'reference':ref,'available':False,'reason':'运行记录已不可访问；配置保持待确认'}
+   if attempt==2:raise RuntimeError('Cannot verify workflow run '+ref+': '+proc.stderr[-250:])
+   time.sleep(2**attempt)
+ with ThreadPoolExecutor(max_workers=4) as pool:
+  results=dict(pool.map(fetch,sorted(refs)))
+ print(f'Workflow runs: {len(results)} checked, {sum(r["available"] for r in results.values())} available',flush=True)
+ return results
 
 def collect_review_targets(raw):
  refs=set()
@@ -114,7 +140,7 @@ def collect_review_targets(raw):
   for comment in issue['comments']['nodes']:
    author=comment.get('author') or {}
    if author.get('__typename')!='Bot' and not author.get('login','').lower().endswith(('bot','[bot]')):
-    refs.update(followup_references(comment['bodyText']))
+    refs.update(followup_references(comment.get('body') or comment['bodyText']))
  targets={};items=sorted(refs)
  for pos in range(0,len(items),30):
   batch=items[pos:pos+30];parts=[]

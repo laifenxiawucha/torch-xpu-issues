@@ -44,7 +44,7 @@ class ClosureReviewTests(unittest.TestCase):
 
     def test_nightly_records_can_complete_a_list(self):
         result = review_issue(issue(CASES, [comment('✅ test_one test_two Passed in nightly testing on BMG', bot=True)]), [])
-        self.assertEqual(result['status'], '优先审查关闭')
+        self.assertEqual(result['status'], '需要补充确认')
         self.assertEqual(result['counts']['passed'], 2)
 
     def test_latest_failed_case_overrides_old_pass(self):
@@ -119,6 +119,10 @@ class ClosureReviewTests(unittest.TestCase):
         self.assertFalse(result['inventory_complete'])
         self.assertFalse(result['candidate'])
 
+    def test_matching_title_count_does_not_override_explicit_partial_list(self):
+        source=issue('Cases:\nRepresentative cases only:\ntest_ops.py::TestOps::test_one',[comment('test_one Passed in nightly testing',bot=True)],'1 cases')
+        self.assertFalse(review_issue(source,[])['inventory_complete'])
+
     def test_unexpected_success_is_not_resolved_by_ordinary_pass(self):
         source=issue(CASES,[comment('test_one test_two Passed in nightly testing',bot=True)],'Unexpected success in test_ops')
         self.assertEqual(review_issue(source,[])['status'],'需要补充确认')
@@ -164,6 +168,82 @@ class ClosureReviewTests(unittest.TestCase):
         self.assertNotIn('xfail',row['engineering_action'])
         self.assertEqual(row['classification_confidence'],'人工核查')
         self.assertIn('人工核查',row['impact_evidence'])
+
+    def test_logs_before_cases_are_not_inventory(self):
+        body='test_ops.py::TestOps::test_previous PASSED\nCases:\ntest_ops.py::TestOps::test_one\ntest_ops.py::TestOps::test_two'
+        self.assertEqual(len(inventory(body)[0]),2)
+
+    def test_singular_case_section_is_a_declared_list(self):
+        cases,complete,_=inventory('Case:\n`op_ut,test.ops.TestOps,test_one`\nRoot cause\nDetails')
+        self.assertEqual(len(cases),1)
+        self.assertTrue(complete)
+
+    def test_explicit_single_case_in_title_and_body_is_recognized(self):
+        source=issue('test_ops.py::TestOps::test_one fails before the assertion.','',title='test_one fails on XPU')
+        source['comments']={'nodes':[]}
+        result=review_issue(source,[])
+        self.assertEqual(result['total'],1)
+        self.assertTrue(result['inventory_complete'])
+
+    def test_relocated_class_alias_requires_explicit_source_statement(self):
+        body='Cases:\ntest_indexing_xpu.py::TestIndexingXPU::test_one'
+        c=comment('');c['body']='The wrapper files were removed; cases now run from upstream.\n| Test | Result |\n| --- | --- |\n| test_indexing.py::TestIndexingDeviceXPU::test_one | passed |'
+        result=review_issue(issue(body,[c],'1 UTs fail'),[])
+        self.assertEqual(result['total'],1)
+        self.assertEqual(result['counts']['passed'],1)
+        self.assertEqual(len(result['cases'][0]['aliases']),1)
+
+    def test_configuration_is_not_claimed_matched_without_a_pass(self):
+        result=review_issue(issue(CASES),[])
+        self.assertEqual(result['configuration']['status'],'无通过记录，配置待核对')
+
+    def test_dotted_node_ids_and_modules_are_distinguished(self):
+        body='Affected Test Cases\n```\ntest_ops.py — 12 failures\n```\nops.test_ops_xpu::TestOps.test_one\nops.test_ops_xpu::TestOps.test_two'
+        cases, complete, _=inventory(body)
+        self.assertTrue(complete)
+        self.assertEqual(len(cases),2)
+        self.assertTrue(all(c['key'][2].startswith('test_') for c in cases))
+
+    def test_human_comment_result_table_supplements_missing_inventory(self):
+        c=comment('')
+        c['body']='Re-checked all 2 cases.\n\n| Test | Result on main |\n| --- | --- |\n| test_ops.py::TestOps::test_one | passed |\n| test_ops.py::TestOps::test_two | skipped by design |'
+        result=review_issue(issue('Full per-test list not enumerated.',[c],'2 UTs fail'),[])
+        self.assertEqual(result['total'],2)
+        self.assertTrue(result['inventory_complete'])
+        self.assertEqual(result['counts']['passed'],1)
+        self.assertEqual(result['counts']['skipped'],1)
+
+    def test_related_other_case_does_not_become_transfer_candidate(self):
+        target={'intel/torch-xpu-ops#2':{'type':'Issue','state':'OPEN'}}
+        for text in ['The other FP8 case is already tracked in #2.','Follow-up to #2.','Split from #2.','Likely duplicate of #2.']:
+            result=review_issue(issue(text),[],target)
+            self.assertFalse(result['candidate'],text)
+            self.assertTrue(result['related_records'],text)
+
+    def test_explicit_remaining_work_transfer_is_preserved(self):
+        target={'intel/torch-xpu-ops#2':{'type':'Issue','state':'OPEN'}}
+        result=review_issue(issue('All remaining work is now tracked in #2.'),[],target)
+        self.assertIn('剩余任务有明确转移记录',result['reasons'])
+
+    def test_case_excerpt_contains_case_even_in_large_batch(self):
+        names=['test_case_'+str(n) for n in range(100)]
+        source=issue('Cases:\n'+'\n'.join('op_ut,test.ops.TestOps,'+n for n in names),[comment(' '.join(names)+' Passed in nightly testing on BMG',bot=True)])
+        result=review_issue(source,[])
+        self.assertEqual(result['counts']['passed'],100)
+        self.assertTrue(all(c['key'][2] in c['evidence'][-1]['excerpt'] if 'key' in c else c['name'].split(',')[-1] in c['evidence'][-1]['excerpt'] for c in result['cases']))
+
+    def test_workflow_and_branch_mismatch_prevents_priority(self):
+        source=issue(CASES+'\nFound in https://github.com/intel/torch-xpu-ops/actions/runs/10',[comment('test_one test_two Passed in [nightly testing](https://github.com/intel/torch-xpu-ops/actions/runs/20) on BMG',bot=True)],'[BMG][dpclang] failures')
+        runs={'intel/torch-xpu-ops@run:10':{'available':True,'path':'.github/workflows/pull_dpclang.yml','branch':'feature'},'intel/torch-xpu-ops@run:20':{'available':True,'path':'.github/workflows/nightly.yml','branch':'main'}}
+        result=review_issue(source,[],runs=runs)
+        self.assertEqual(result['status'],'需要补充确认')
+        self.assertIn('通过记录与原报告 workflow 不同',result['configuration']['checks'])
+        self.assertIn('通过记录与原报告分支不同',result['configuration']['checks'])
+
+    def test_matching_workflow_branch_and_hardware_can_be_prioritized(self):
+        source=issue(CASES+'\nFound in https://github.com/intel/torch-xpu-ops/actions/runs/10',[comment('test_one test_two Passed in [nightly testing](https://github.com/intel/torch-xpu-ops/actions/runs/20) on BMG',bot=True)],'[BMG] failures')
+        runs={f'intel/torch-xpu-ops@run:{n}':{'available':True,'path':'.github/workflows/nightly.yml','branch':'main'} for n in [10,20]}
+        self.assertEqual(review_issue(source,[],runs=runs)['status'],'优先审查关闭')
 
 
 if __name__ == '__main__':
