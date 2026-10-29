@@ -3,11 +3,16 @@ import csv,json,re
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from issue_facts import (IMPACT_TYPES, classify_impact,record_nature,discovery_channels,reproduction_clues,verification_candidates,blocker_info,repair_summary)
+from closure_review import review_issue, CASE_STATUS
 REPO='intel/torch-xpu-ops'
 URL=re.compile(r'(?:https?://|www\.)[^\s<>\]\)"\x27]+',re.I)
 SCOPES=['算子/kernel','编译器/图执行','分布式/XCCL','运行时/驱动/设备','模型/端到端（根因待定位）','量化/torchao','对外 API/语义','Profiler/性能工具','构建/安装/工具链','测试/CI 基础设施','跟踪/规划','文档/术语','未知']
 def clean(value):
- if isinstance(value,str):return URL.sub('[地址已移除]',value)
+ if isinstance(value,str):
+  def replacement(hit):
+   ref=re.search(r'github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)',hit.group(0),re.I)
+   return '[地址已移除：'+ref.group(1)+'#'+ref.group(2)+']' if ref else '[地址已移除]'
+  return URL.sub(replacement,value)
  if isinstance(value,list):return [clean(v) for v in value]
  if isinstance(value,dict):return {k:clean(v) for k,v in value.items()}
  return value
@@ -20,7 +25,10 @@ def bucket(days):return '>365' if days>365 else '181-365' if days>180 else '91-1
 def encode(value):return json.dumps(clean(value),ensure_ascii=False,separators=(',',':')).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
 def classify(title,body,labels):
  if '测试/CI 基础设施故障' in classify_impact(title,labels,body):return '测试/CI 基础设施','标题或正文的明确基础设施故障线索','规则推断'
- rules=[('跟踪/规划',r'\btracker\b|\btracking\b|checklist|\bRFC\b|known issues list|auto skip|periodic run'),('量化/torchao',r'torchao|quantiz|pt2e|int8'),('分布式/XCCL',r'distributed|xccl|symm_mem|dtensor|torchrun|c10d|sharding|collective'),('Profiler/性能工具',r'profiler|profiling|\bpti\b|unitrace'),('构建/安装/工具链',r'cmake|installation|install wheel|build fail|linker|C\+\+ extension|setup.py'),('运行时/驱动/设备',r'\bdriver\b|oneapi|sycl rt|\bur error\b|device context|outofmemory|\boom\b|device_properties|ipc_handle'),('模型/端到端（根因待定位）',r'test: e2e|torchbench|timm_|transformers.*training|model.*accuracy'),('编译器/图执行',r'\binductor\b|\bdynamo\b|torch\.compile|compiled_autograd|aotinductor|\baoti\b|dynamic_shapes|graph.*capture|xpu.graph|graph_break'),('对外 API/语义',r'RuntimeError not raised|error.checking|invalid.*argument|instead of.*(?:error|exception)'),('算子/kernel',r'aten[.:]|kernel|convolution|conv[123]d|softmax|pool[123]d|\btopk\b|\bkthvalue\b|\bmedian\b|matmul|addmm|interpolate|layer.?norm|instance_norm|\bgelu\b|scatter|gather|reduce|reduction|test_nn|test_unary|test_ops|test_linalg'),('文档/术语',r'documentation|terminology|doc.*typo')]
+ rules=[('跟踪/规划',r'\btracker\b|\btracking\b|checklist|\bRFC\b|known issues list|auto skip|periodic run'),('量化/torchao',r'torchao|quantiz|pt2e|\b(?:INT[48]|FP8)\b.*(?:GEMM|WOQ|RTN)'),('分布式/XCCL',r'distributed|xccl|symm_mem|dtensor|torchrun|c10d|sharding|collective'),('Profiler/性能工具',r'profiler|profiling|\bpti\b|unitrace'),('构建/安装/工具链',r'cmake|installation|install wheel|build fail|linker|C\+\+ extension|setup.py'),('运行时/驱动/设备',r'\bdriver\b|oneapi|sycl (?:rt|runtime)|\bur error\b|device context|outofmemory|\boom\b|device_properties|ipc_handle'),('模型/端到端（根因待定位）',r'test: e2e|torchbench|timm_|transformers.*training|model.*accuracy'),('编译器/图执行',r'\binductor\b|\bdynamo\b|torch\.compile|compiled_autograd|aotinductor|\baoti\b|dynamic_shapes|graph.*capture|xpu.graph|graph_break'),('对外 API/语义',r'RuntimeError not raised|error.checking|invalid.*argument|instead of.*(?:error|exception)'),('算子/kernel',r'aten[.:]|torch\.linalg|test_decomp|test_foreach|kernel|convolution|conv[123]d|softmax|pool[123]d|\btopk\b|\bkthvalue\b|\bmedian\b|matmul|addmm|interpolate|layer.?norm|instance_norm|\bgelu\b|scatter|gather|reduce|reduction|test_nn|test_unary|test_ops|test_linalg'),('文档/术语',r'documentation|terminology|doc.*typo')]
+ explicit_modules={'ops':'算子/kernel','inductor':'编译器/图执行','dynamo':'编译器/图执行','sdpa':'算子/kernel','distributed':'分布式/XCCL','profiler':'Profiler/性能工具'}
+ for module,scope in explicit_modules.items():
+  if re.search(r'(?i)module: '+re.escape(module)+r'(?:;|$)',labels):return scope,'原始模块标签：module: '+module,'规则推断'
  for scope,pattern in rules:
   hit=re.search(pattern,title+' '+labels,re.I)
   if hit:return scope,'标题/原始标签：'+hit.group(0),'规则推断'
@@ -50,7 +58,7 @@ def load_overrides(path,ids):
  data=json.loads(path.read_text());assert data.get('schema_version')==1,'Unsupported override schema'
  issues=data.get('issues',{});allowed={'surface_scope','impact_types','public_record_status','primary_blocker','verification'}
  for number,item in issues.items():
-  assert number in ids,'Override references missing issue: '+number
+  assert number.isdigit(),'Override issue number must be numeric: '+number
   assert all(isinstance(item.get(k),str) and item[k].strip() for k in ['reason','reviewer','reviewed_at','evidence']),'Override requires reason, reviewer, reviewed_at and evidence: '+number
   datetime.fromisoformat(item['reviewed_at'])
   changes=item.get('set',{});assert changes and set(changes)<=allowed,'Unsupported override fields: '+number
@@ -59,8 +67,11 @@ def load_overrides(path,ids):
   if 'verification' in changes:
    v=changes['verification'];assert all(isinstance(v.get(k),str) and v[k] for k in ['version','date','result','hardware','evidence'])
    datetime.fromisoformat(v['date']);assert v['result'] in ['仍复现','未复现','部分解决']
- return clean(issues)
+ # Reviewed issues can close; retain their attribution in the config and skip
+ # archived records when rebuilding the current open set.
+ return clean({number:item for number,item in issues.items() if number in ids})
 def render(raw,root):
+ raw=clean(raw)
  snapshot=datetime.fromisoformat(raw['fetched_at']).astimezone(timezone.utc);day=snapshot.date();stamp=day.isoformat();root=Path(root)
  raw_prs={p['id']:p for p in raw['prs']};prs={id:pr_details(p) for id,p in raw_prs.items()}
  overrides=load_overrides(Path(__file__).parent/'overrides.json',{str(i['number']) for i in raw['issues']})
@@ -74,6 +85,14 @@ def render(raw,root):
   linked.sort(key=lambda p:(not p['explicit_fix_reference'],p['state']!='OPEN',-p['number']));repair=repair_summary(linked)
   scope,scope_evidence,confidence=classify(title,body,labels);impacts=classify_impact(title,labels,body);nature=record_nature(title,labels,markdown or body,scope,impacts)
   blocker,blocker_evidence=blocker_info(labels,last['text'] if last else '')
+  review=overrides.get(key)
+  if review:
+   changes=review['set']
+   if 'surface_scope' in changes:
+    scope=changes['surface_scope'];scope_evidence='人工核查：'+review['evidence'];confidence='人工核查'
+   if 'impact_types' in changes:impacts=changes['impact_types']
+   nature=changes.get('public_record_status',record_nature(title,labels,markdown or body,scope,impacts))
+   if 'primary_blocker' in changes:blocker=changes['primary_blocker'];blocker_evidence='人工核查：'+review['evidence']
   skip=any(x.startswith('skipped') for x in label_list);regression='regression' in label_list
   paths=extract(r'(?:test[/\\][\w./\\-]+\.py|\btest_[\w]+\.py)(?:::[\w.\[\],=:+-]+)*',title+'\n'+body,100)
   source_paths=explicit_source_paths(title+'\n'+body)
@@ -89,15 +108,19 @@ def render(raw,root):
   progress='明确关闭引用 PR 进行中' if fix_open else '明确关闭引用 PR 已合并，验证待核对' if fix_merged else '明确关闭引用 PR 已关闭未合并' if repair['explicit'] else '仅见普通 PR 引用，进展待核对' if linked else '存在依赖线索' if blocker=='存在依赖线索' else '跟踪/规划事项' if scope=='跟踪/规划' else '近 30 天有人工评论' if recent else '带跳过标签，验证待核对' if skip else '当前公开进展待核对'
   action='核对跟踪清单与剩余工作' if scope=='跟踪/规划' else '核对测试预期与 xfail 标记' if '测试预期需核对' in impacts else '排查明确关闭引用 PR 的失败检查' if repair['ci_failed'] else '处理明确关闭引用 PR 的合并冲突' if any(p['mergeable']=='CONFLICTING' for p in fix_open) else '响应审查修改意见' if any(p['review']=='CHANGES_REQUESTED' for p in fix_open) else '核对已合并 PR 范围和复测记录' if fix_merged and not fix_open else '核对跳过条件与当前复测' if skip else '跟进明确关闭引用 PR 的审查与检查' if fix_open else '核对依赖版本与上游进展' if blocker=='存在依赖线索' else '确认回归的通过/失败版本' if regression else '用当前版本核对测试入口' if paths else '补充问题描述与复现材料'
   row={'issue':key,'title':title,'created_at':i['createdAt'][:10],'updated_at':i['updatedAt'][:10],'updated_at_utc':i['updatedAt'],'age_days':str(age),'age_bucket':bucket(age),'last_human_comment_at':last['created_at'][:10] if last else '', 'surface_scope':scope,'scope_evidence':scope_evidence,'classification_confidence':confidence,'public_record_status':nature,'impact_types':'；'.join(impacts),'impact_evidence':'未识别到具体影响线索' if impacts==['影响未知'] else '标题/原始标签或正文中的明确症状线索（规则推断）','primary_blocker':blocker,'blocker_evidence':blocker_evidence,'owner_status':'已设置 GitHub assignee' if i['assignees']['nodes'] else '未设置 GitHub assignee','assignees':'; '.join(n['login'] for n in i['assignees']['nodes']),'milestone':(i['milestone'] or {}).get('title',''),'labels_raw':labels,'regression_label':'1' if regression else '0','skipped_label':'1' if skip else '0','discovery_channels':'；'.join(discovery_channels(title,labels,paths)),'hardware_in_title':hardware,'os_in_title':osnames,'reported_os':reported_os[0] if reported_os else '', 'release_in_title':release,'reported_pytorch_version':version[0] if version else '', 'environment':' / '.join(v for v in [hardware,osnames,'PT '+version[0][:65] if version else release] if v) or '未提取到环境信息','test_paths':'; '.join(paths),'source_paths':'; '.join(source_paths),'api_family':apis[0] if apis else 'API 未识别','failure_signatures':failure,'comment_count':str(len(comments)),'current_progress':progress,'repair_pr_status':repair['status'],'pr_relation':repair['relation'],'explicit_fix_pr_count':str(len(repair['explicit'])),'cross_reference_pr_count':str(len(linked)-len(repair['explicit'])),'pr_ci_failed':'1' if repair['ci_failed'] else '0','pr_stage':'；'.join(dict.fromkeys(p['stage'] for p in fix_open)) if fix_open else repair['status'],'engineering_action':action,'repro_materials':clues['repro_materials'],'repro_gaps':clues['repro_gaps'],'repro_code_present':clues['repro_code_present'],'verification_status':'有待核查的人工评论线索' if candidates else '未提取到明确验证线索','verification_candidate_count':str(len(candidates)),'latest_verified_version':'未确认','classification_review':'未人工核查','linked_prs':[{'id':p['id'],'explicit_fix_reference':p['explicit_fix_reference']} for p in linked]}
-  review=overrides.get(key)
   if review:
    for field,value in review['set'].items():
     if field=='verification':row['latest_verified_version']=value['version'];row['verification_status']='已人工核查验证记录'
     else:row[field]='；'.join(value) if isinstance(value,list) else value
    row['classification_review']='有人工核查记录';row['scope_evidence']='人工核查：'+review['evidence'] if 'surface_scope' in review['set'] else row['scope_evidence']
+   if 'impact_types' in review['set']:row['impact_evidence']='人工核查：'+review['evidence']
+  closing=review_issue(i,linked,raw.get('review_targets',{}))
+  row.update({'closure_candidate':'1' if closing['candidate'] else '0','closure_status':closing['status'],'closure_reasons':'；'.join(closing['reasons']) or '暂无关闭候选依据','closure_case_total':str(closing['total']),'closure_declared_total':str(closing['declared_total'] or ''),'closure_case_disposed':str(closing['disposed']),'closure_inventory_complete':'1' if closing['inventory_complete'] else '0','closure_blockers':'；'.join(closing['blockers']),'closure_checks':'；'.join(closing['checks']),'closure_latest_evidence':closing['latest_evidence_at']})
+  for status,count in closing['counts'].items():row['closure_case_'+status]=str(count)
   detail={'body_text':body if not markdown else '','body_markdown':markdown,'comments':comments,'last_human_comment_excerpt':last['text'] if last else '', 'repro_commands':clues['repro_commands'],'repro_code_excerpt':clues['repro_code_excerpt'],'repro_code_blocks':clues['repro_code_blocks'],'verification_candidates':candidates,'review':review}
+  detail['closure_review']=closing
   rows.append(clean(row));details[key]=clean(detail)
- data={'schema_version':3,'repository':REPO,'snapshot':stamp,'fetched_at':raw['fetched_at'],'started_at':raw['started_at'],'snapshot_local':snapshot.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),'rows':rows,'prs':prs,'impact_types':IMPACT_TYPES,'scopes':SCOPES,'collection':{'comments_complete':True,'timelines_complete':True,'linked_pr_count':len(prs),'comment_count':sum(len(x['comments']) for x in details.values()),'open_set_verified_at':raw.get('open_set_verified_at',raw['fetched_at']),'issue_count_verified':raw['total_count']}}
+ data={'schema_version':4,'repository':REPO,'snapshot':stamp,'fetched_at':raw['fetched_at'],'started_at':raw['started_at'],'snapshot_local':snapshot.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),'rows':rows,'prs':prs,'impact_types':IMPACT_TYPES,'scopes':SCOPES,'case_statuses':CASE_STATUS,'collection':{'comments_complete':True,'timelines_complete':True,'linked_pr_count':len(prs),'review_target_count':len(raw.get('review_targets',{})),'comment_count':sum(len(x['comments']) for x in details.values()),'open_set_verified_at':raw.get('open_set_verified_at',raw['fetched_at']),'issue_count_verified':raw['total_count']}}
  data['fields']=[k for k in rows[0] if k!='linked_prs']
  inventory=root/f'torch-xpu-ops-issue-inventory-{stamp}.csv'
  for path,items in [(inventory,rows),(root/f'torch-xpu-ops-aged-issues-{stamp}.csv',[r for r in rows if int(r['age_days'])>180])]:

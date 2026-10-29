@@ -31,6 +31,7 @@ python tools/update_report.py --output-dir .
 ## 文件职责
 
 - `update_report.py`：GitHub 只读采集、分页和集合验证。
+- `closure_review.py`：可解析用例清单、逐项处理证据、关闭候选原因、未完成事项与目标版本核对。
 - `issue_facts.py`：问题表现、记录性质、发现渠道、材料和验证候选线索。
 - `render_report.py`：分类、去重 PR、人工更正、CSV 与 HTML 输出。
 - `report-template.html`、`report.css`、`report.js`：模板、桌面布局和交互；生成时内联。
@@ -83,3 +84,24 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 ```
 
 可传入在线 URL 验证部署结果。自动检查覆盖多选、历史、矩阵数据、引用语义、懒加载、原文代码、导出分享及浅/深色可访问性，不针对手机端适配。
+
+## 关闭审查规则与回归
+
+仅聚合当前仍 open 的记录，候选按 issue 去重，原因允许重叠。关闭引用 PR 合并仅作为候选依据；普通 PR 引用不自动成为修复证明。逐项修复需关联已合并 PR，nightly 通过记录保留来源和平台，代理叙述、fix 指令及未来计划不作为完成证明。
+
+解析原文的 `op_ut`、`upstream_*` 清单、pytest 标识及用例表格，按模块、类、用例名去重；裸用例名只有在本 issue 中不歧义时才关联。删除线单列为待确认。标题声明数量不一致、部分清单和无法解析的条目均保留覆盖未知，不生成“全部完成”的结论。
+
+优先审查需完整清单及逐项处理证据，并且没有已提取的未完成事项。skip / xfail、目标 release 未确认、random / flaky、尚未确认清理的 Unexpected success 均需额外核对。专门保存 skip 原因的记录继续展示遗留任务。重复或转移候选需要核对目标确为 issue，并保留人工确认要求。
+
+已关闭 issue 的 overrides 记录可继续保存在配置中，不参与当前 open 集合，也不阻断刷新。人工更正先于工程建议计算，避免继续沿用旧分类。
+
+公开快照中的 GitHub 地址转换为仓库名与编号；渲染前采用相同清理规则，可从公开快照重建相同 HTML。采集遇到已删除的后续引用时保留未知，不伪造主记录；连接失败或非预期 API 错误仍停止生成。
+
+浏览器回归包括：
+
+```sh
+PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node tools/check_browser.cjs
+PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node tools/check_closure_browser.cjs
+```
+
+新增检查覆盖关闭审查计数、排序、分享、逐项懒加载、已知正反例、输入与撤销竞争、多选图表、失效分享条件、剪贴板拒绝、PR 汇总和桌面偏好保存。

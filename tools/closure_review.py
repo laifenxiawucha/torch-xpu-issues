@@ -1,0 +1,304 @@
+"""Explain closure-review candidates from case-level public evidence.
+
+This module never declares a bug fixed or an issue safe to close. Incomplete
+inventories, historical crossings and temporary skips remain visible to reviewers.
+"""
+import re
+from collections import Counter
+
+REPO = 'intel/torch-xpu-ops'
+CASE_STATUS = {
+    'passed': '有通过记录', 'fixed': '修复 PR 已合并',
+    'skipped': '已 skip / xfail', 'obsolete': '测试已删除 / 替换',
+    'transferred': '已转移跟踪', 'crossed': '已划掉，结论待确认',
+    'failed': '有失败反馈', 'unknown': '处理未知',
+}
+DISPOSED = {'passed', 'fixed', 'skipped', 'obsolete', 'transferred'}
+PLAN = re.compile(r'\b(?:please|will|should|could|would|might|maybe|plan(?:ned)?|need(?:s)? to|to be|until|once|only (?:when|after)|not yet)\b', re.I)
+NEGATIVE = re.compile(r'\b(?:still (?:fail\w*|persist\w*|reproduc\w*)|issue still (?:exists|persists)|do not close|don.t close|not (?:yet )?(?:fixed|resolved)|remain\w* fail\w*|regression in release|cannot (?:be )?(?:re.?checked|collect)|will be intentionally introduced|stays? open until)\b|仍然?失败|尚未修复', re.I)
+FOLLOWUP = re.compile(r'duplicate (?:of|issue)|track(?:ed|ing)? (?:this |the |these |that |problem |issues? |cases? )*(?:in|under)|follow.up|转移.*跟踪|重复.*问题', re.I)
+
+
+def references(text):
+    """Keep repository identity; a PyTorch number must not become an Intel issue."""
+    found = []
+    pattern = r'https?://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)|(?<![\w/#])#(\d+)'
+    for m in re.finditer(pattern, text):
+        repo = m.group(1) or m.group(3) or REPO
+        number = int(m.group(2) or m.group(4) or m.group(5))
+        token = f'{repo}#{number}'
+        if token not in found:
+            found.append(token)
+    return found
+
+
+def followup_references(text):
+    lines = text.splitlines()
+    result = set()
+    for index, line in enumerate(lines):
+        if FOLLOWUP.search(line):
+            result.update(references('\n'.join(lines[index:index + 3])))
+    return result
+
+
+def case_identity(value):
+    value = value.strip(' ~`*|,;')
+    if re.match(r'^\w+,[\w.-]+,test_', value):
+        parts = value.split(',')
+        if len(parts) < 3:
+            return None
+        module, name = parts[1], parts[2].strip(' ~`*|')
+        parts = module.split('.')
+        klass = parts[-1]
+        module = next((x for x in reversed(parts[:-1]) if x.startswith('test_')), '')
+    elif '::' in value:
+        parts = value.replace('\\', '/').split('::')
+        module = parts[0].split('/')[-1].removesuffix('.py')
+        klass = parts[-2] if len(parts) > 2 else ''
+        name = parts[-1]
+    else:
+        parts = value.split('.')
+        name = parts[-1]
+        klass = parts[-2] if len(parts) > 1 and not parts[-2].startswith('test_') else ''
+        module = next((x for x in reversed(parts[:-1]) if x.startswith('test_')), '')
+    if not re.match(r'^test_[\w]', name):
+        return None
+    return (module, klass, name)
+
+
+def inventory(markdown):
+    """Read the declared list, never turn traceback frames into reported cases."""
+    opening = re.split(r'(?im)^\s*(?:#{1,6}\s*)?(?:Error\s*log|ErrorLog|Traceback|Versions|Repro(?:duce|duction)?|Root cause)\b', markdown, maxsplit=1)[0]
+    declared_list = bool(re.search(r'(?im)^\s*(?:#{1,6}\s*)?(?:(?:affected|failing|reported|test)\s+)*(?:cases|tests|failures)\s*[:\n]|^\s*(?:~~)?\w+,[\w.-]+,test_', opening))
+    cases = {}
+    unparsed = 0
+    partial = bool(re.search(r'(?i)representative (?:cases|tests)|partial (?:list|coverage)|examples? (?:only|of)|部分用例', opening))
+    for line in opening.splitlines():
+        stripped = re.sub(r'^\s*(?:[-*]\s*|\d+[.)]\s*|\[[ xX]\]\s*)+', '', line).strip()
+        matches = re.findall(r'\b\w+,[\w.-]+,test_[\w\[\].=,+:/-]+|(?:[\w./\\-]+\.py::)(?:[\w.]+::)?test_[\w\[\].=,+:/-]+', stripped)
+        if not matches and (stripped.startswith(('|', '`', '~~')) or re.match(r'^test_\w+(?:\s|$)', stripped)):
+            matches = re.findall(r'(?<![\w.])(?:[A-Z]\w*\.)?test_[\w\[\].=,+:/-]+', stripped)
+        if re.match(r'^\w+,[\w.-]+,', stripped) and not matches:
+            unparsed += 1
+        for value in matches:
+            key = case_identity(value)
+            if not key:
+                unparsed += 1
+                continue
+            is_crossed = bool(re.search(r'~~[^\n]*' + re.escape(value) + r'[^\n]*~~', line))
+            if key not in cases:
+                cases[key] = {'name': value, 'key': key, 'crossed': is_crossed, 'line': line.strip(), 'status': 'unknown', 'evidence': []}
+            else:
+                # A live duplicate wins over a crossed occurrence of the same case.
+                cases[key]['crossed'] &= is_crossed
+    expected = re.search(r'(?i)(\d+)\s+(?:UTs?\s+fail|(?:affected |failing )?(?:test )?cases?\s+(?:in total|total))', opening[:1500])
+    if expected and len(cases) != int(expected.group(1)):
+        partial = True
+    return list(cases.values()), declared_list and not unparsed and not partial, unparsed
+
+
+def _is_bot(comment):
+    author = comment.get('author') or {}
+    return author.get('__typename') == 'Bot' or author.get('login', '').lower().endswith(('bot', '[bot]'))
+
+
+def _evidence(text, date, author, source, kind):
+    # Reference numbers survive the report's required URL removal.
+    refs = references(text)
+    text = re.sub(r'https?://[^\s<>\])]+', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return {'date': date[:10], 'author': author, 'source': source, 'kind': kind,
+            'excerpt': text[:850], 'references': refs}
+
+
+def _matching_cases(text, cases, lookup):
+    """A bare test name is accepted only when unambiguous within this issue."""
+    for token in set(re.findall(r'\btest_[A-Za-z0-9_]+', text)):
+        options = lookup.get(token, [])
+        for case in options:
+            module, klass, name = case['key']
+            # Parameter identifiers are significant. Do not match a prefix variant.
+            if not case['_pattern'].search(text):
+                continue
+            if len(options) > 1 and not (klass and klass in text and module and module in text):
+                continue
+            yield case
+
+
+def review_issue(issue, linked, targets=None):
+    targets = targets or {}
+    markdown = issue.get('body') or issue.get('bodyText', '')
+    cases, complete, unparsed = inventory(markdown)
+    lookup = {}
+    for case in cases:
+        name = case['key'][2]
+        case['_pattern'] = re.compile(r'(?<![\w])' + re.escape(name) + r'(?![\w\[])')
+        lookup.setdefault(re.match(r'test_[A-Za-z0-9_]+', name).group(0), []).append(case)
+    declared = re.search(r'(?i)\b(\d+)\s+(?:UTs?|(?:test )?cases?)\b', issue['title'])
+    if declared and len(cases) != int(declared.group(1)):
+        complete = False
+    comments = sorted(issue['comments']['nodes'], key=lambda c: c['createdAt'])
+    prs = {f"{p['repository']}#{p['number']}": p for p in linked}
+    closure = [p for p in linked if p['explicit_fix_reference']]
+    merged = [p for p in closure if p['state'] == 'MERGED']
+    opened = [p for p in closure if p['state'] == 'OPEN']
+    evidence, blockers, cautions, reasons = [], [], [], []
+    latest_negative = ''
+    latest_positive = ''
+    duplicate = False
+    transfer = False
+    source_texts = [(markdown, issue['updatedAt'], (issue.get('author') or {}).get('login', '报告者'), 'Issue 正文', False)]
+    source_texts += [(c.get('body') or c['bodyText'], c['createdAt'], (c.get('author') or {}).get('login', '账号不可见'), 'Bot 评论' if _is_bot(c) else '人工评论', _is_bot(c)) for c in comments]
+    for text, date, author, source, bot in source_texts:
+        trusted_nightly = bot and author in ('github-actions', 'github-actions[bot]') and 'Passed in' in text and 'nightly testing' in text
+        # Agent narratives and commands never become proof of a completed disposition.
+        if bot and not trusted_nightly:
+            continue
+        lines = text.splitlines()
+        groups = []
+        for idx, line in enumerate(lines):
+            if trusted_nightly:
+                groups = [text]
+                break
+            if line.strip().startswith('>') or re.search(r'^\s*@\w+\s+(?:fix|repro)', line):
+                continue
+            # A short status heading may apply to an immediately following test list.
+            context = line
+            if re.search(r'(?i)\b(?:fixed|skipped|passed|deleted|removed|renamed|tracked in)\b', line) and not re.search(r'\btest_\w+', line):
+                tail = []
+                for following in lines[idx + 1:idx + 14]:
+                    if re.match(r'^\s*#{1,6}\s', following):
+                        break
+                    if re.match(r'^\s*(?:[-*]\s+|`|\w+,[\w.-]+,test_|[\w./\\-]+\.py::)', following) and re.search(r'test_', following) or not following.strip() or following.strip().startswith('```'):
+                        tail.append(following)
+                    else:
+                        break
+                context += '\n' + '\n'.join(tail)
+            groups.append(context)
+        for context in groups:
+            refs = references(context)
+            matching = list(_matching_cases(context, cases, lookup))
+            specific_failure = source != 'Issue 正文' and not trusted_nightly and bool(matching) and re.search(r'(?i)\b(?:fails?|failed|hangs?|crash(?:es|ed)?)\b', context) and not PLAN.search(context) and not re.search(r'(?i)\b(?:before|previously|used to|no longer|now pass\w*|not fail\w*|doesn.t fail\w*)\b', context)
+            negative = bool(NEGATIVE.search(context) or specific_failure)
+            if negative and source != 'Issue 正文':
+                item = _evidence(context, date, author, source, '失败或未完成反馈')
+                evidence.append(item)
+                latest_negative = max(latest_negative, date)
+            is_dup = bool(re.search(r'(?i)(?:is |it.s |as? )?(?:a )?duplicate of|重复.*#', context))
+            is_transfer = bool(FOLLOWUP.search(context))
+            valid_targets = [ref for ref in refs if ref != f"{REPO}#{issue['number']}" and targets.get(ref, {}).get('type') == 'Issue' and (targets[ref].get('state') == 'OPEN' or is_dup and targets[ref].get('state') == 'CLOSED')]
+            if (is_dup or is_transfer) and valid_targets and not PLAN.search(context):
+                duplicate |= is_dup
+                transfer |= is_transfer
+                evidence.append(_evidence(context, date, author, source, '后续跟踪记录'))
+            global_pass = source != 'Issue 正文' and bool(re.search(r'(?i)\ball (?:the )?(?:tests|cases|reported tests|tests reported in this issue)[^\n]{0,100}(?:are (?:currently )?passing|now pass|have passed)', context)) and not negative and not PLAN.search(context) and not re.search(r'(?i)\b(?:except|apart from|most|some|remaining)\b', context)
+            if global_pass:
+                matching = cases
+            if not matching:
+                continue
+            status = None
+            if negative:
+                status = 'failed'
+            elif trusted_nightly or global_pass or (source != 'Issue 正文' or context.lstrip().startswith('|')) and re.search(r'(?i)\b(?:passed|passes|now passing|verified passing)\b', context) and not PLAN.search(context) and not re.search(r'(?i)\b(?:fail\w*|hang\w*|crash\w*|baseline|isolation|alone|previous|earlier|rest of|other tests)\b', context):
+                status = 'passed'
+            elif re.search(r'(?i)\b(?:deleted|removed|renamed|replaced|obsolete)\b', context) and not PLAN.search(context):
+                status = 'obsolete'
+            elif re.search(r'(?i)\b(?:skipped|xfail(?:ed)?|skip added)\b', context) and not re.search(r'(?i)\b(?:will|should|please|plan|to be|not yet)\b', context):
+                if any(prs.get(ref, {}).get('state') == 'MERGED' for ref in refs) or re.search(r'(?i)\b(?:are|is|now|already|have been) (?:\w+ )?(?:skipped|xfail)|skip (?:is|was|has been) (?:added|merged)', context):
+                    status = 'skipped'
+            elif re.search(r'(?i)\bfix(?:ed)?\b', context) and not PLAN.search(context) and any(prs.get(ref, {}).get('state') == 'MERGED' for ref in refs):
+                status = 'fixed'
+            elif is_transfer and valid_targets and not PLAN.search(context):
+                status = 'transferred'
+            if status:
+                item = _evidence(context, date, author, source, CASE_STATUS[status])
+                evidence.append(item)
+                if status in DISPOSED:
+                    latest_positive = max(latest_positive, date)
+                for case in matching:
+                    # Body edit time is not a per-case verification timestamp.
+                    if case['evidence'] and source == 'Issue 正文':
+                        continue
+                    case['status'] = status
+                    case['evidence'] = (case['evidence'] + [item])[-3:]
+    for case in cases:
+        if case['status'] == 'unknown' and case['crossed']:
+            case['status'] = 'crossed'
+            case['evidence'].append(_evidence(case['line'], issue['updatedAt'], '正文标记', 'Issue 正文', CASE_STATUS['crossed']))
+    counts = Counter(c['status'] for c in cases)
+    total = len(cases)
+    disposed = sum(counts[k] for k in DISPOSED)
+    marked = total > 0 and all(c['status'] in DISPOSED or c['crossed'] for c in cases)
+    if merged:
+        reasons.append('关闭引用 PR 已合并')
+        for p in merged:
+            evidence.append(_evidence(f"{p['repository']}#{p['number']} · {p['title']} · MERGED · 目标 {p['base']}", p.get('merged_at') or p['updated_at'], 'GitHub PR 状态', 'PR', '关闭引用 PR 已合并'))
+    if total and complete and disposed == total:
+        reasons.append('失败清单已有处理结论')
+    elif complete and marked:
+        reasons.append('失败清单全部标记处理')
+    if duplicate:
+        reasons.append('存在重复主记录')
+    if transfer:
+        reasons.append('存在后续跟踪记录')
+    if opened:
+        blockers.append(f'仍有 {len(opened)} 个明确关闭引用 PR 未合并')
+    if counts['failed']:
+        blockers.append(f"{counts['failed']} 个用例有失败或无法验证反馈")
+    # A later positive for one test does not clear a release-wide failure report.
+    negative_items = [e for e in evidence if e['kind'] == '失败或未完成反馈']
+    unresolved_negative = [e for e in negative_items if re.search(r'(?i)release|pre.release|2\.\d+|do not close|issue still|still persists|still failing', e['excerpt'])]
+    if unresolved_negative:
+        blockers.append('存在版本/分支或未完成反馈，需人工核对是否已解除')
+    elif latest_negative and latest_negative > latest_positive:
+        blockers.append('最近的失败反馈尚无更新的通过证据')
+    title = issue['title']
+    branch = re.search(r'(?i)release[/ ](\d+\.\d+)', title)
+    branch_unconfirmed = bool(branch and not (cases and all(any(branch.group(1) in e['excerpt'] for e in c['evidence']) for c in cases)))
+    expectation_unconfirmed = bool(re.search(r'(?i)unexpected success|unexpectedly pass', title) and not merged)
+    flaky = any(re.search(r'(?i)random|flaky', label['name']) for label in issue.get('labels', {}).get('nodes', []))
+    residual = bool(re.search(r'(?i)^\s*\[skip-added\]|reason for skip|real fix.*needs|follow.up:.*(?:implement|enable|remove)', title + '\n' + markdown))
+    if residual:
+        blockers.append('本条仍承载 skip 原因、能力缺口或恢复测试的后续工作')
+    if not total:
+        cautions.append('未识别到可完整核对的失败用例清单；不代表没有剩余用例')
+    elif not complete:
+        cautions.append('清单解析不完整或原文仅列部分用例，处理覆盖未知')
+    if counts['unknown']:
+        cautions.append(f"{counts['unknown']} 个用例处理未知")
+    if counts['crossed']:
+        cautions.append(f"{counts['crossed']} 个用例仅有删除线，处理原因待确认")
+    if counts['skipped']:
+        cautions.append('skip / xfail 不证明缺陷已修复，需确认保留跟踪或明确接受排除')
+    if duplicate or transfer:
+        cautions.append('需确认主记录覆盖全部剩余任务，并取得维护者关闭结论')
+    if merged:
+        cautions.append('需确认修复覆盖全部问题，并进入 issue 要求的目标版本 / pin')
+    if branch_unconfirmed:
+        cautions.append(f'原报告目标 release/{branch.group(1)}；逐项证据未完整确认该分支')
+    if expectation_unconfirmed:
+        cautions.append('Unexpected success 需核对过期 xfail / expectedFailure 是否已清理，普通通过记录不足以确认')
+    if flaky:
+        cautions.append('带 random / flaky 标签；单次通过不能确认间歇性问题已解除')
+    if len({e.get('source') for e in evidence if e['kind'] in CASE_STATUS.values()}) == 1 and any(e['source'] == 'Bot 评论' for e in evidence):
+        cautions.append('nightly 结果仅覆盖记录中的平台 / 配置，需核对原报告范围')
+    is_candidate = bool(reasons)
+    status = '存在未完成事项' if is_candidate and blockers else '优先审查关闭' if is_candidate and total and complete and disposed == total and not counts['skipped'] and not residual and not branch_unconfirmed and not expectation_unconfirmed and not flaky else '需要补充确认' if is_candidate else '暂无关闭候选依据'
+    unique = []
+    seen = set()
+    for item in sorted(evidence, key=lambda e: e['date'], reverse=True):
+        key = (item['date'], item['author'], item['kind'], item['excerpt'])
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+    for case in cases:
+        del case['key']
+        del case['line']
+        del case['_pattern']
+    return {'candidate': is_candidate, 'status': status, 'reasons': reasons,
+            'counts': {k: counts[k] for k in CASE_STATUS}, 'total': total,
+            'disposed': disposed, 'inventory_complete': bool(total and complete),
+            'declared_total': int(declared.group(1)) if declared else None,
+            'unparsed_lines': unparsed, 'blockers': list(dict.fromkeys(blockers)),
+            'checks': list(dict.fromkeys(cautions)), 'evidence': unique,
+            'cases': cases, 'latest_evidence_at': unique[0]['date'] if unique else ''}

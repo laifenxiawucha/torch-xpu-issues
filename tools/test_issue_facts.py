@@ -55,4 +55,5 @@ class IssueFactsTests(unittest.TestCase):
    with self.assertRaises(AssertionError):load_overrides(path,{'1'})
    item={'reason':'reviewed symptom','reviewer':'maintainer','reviewed_at':'2026-10-15','evidence':'exact description','set':{'impact_types':['正确性']}}
    path.write_text(json.dumps({'schema_version':1,'issues':{'1':item}}));self.assertEqual(load_overrides(path,{'1'})['1']['set']['impact_types'],['正确性'])
+   self.assertEqual(load_overrides(path,{'2'}),{},'Closed reviewed issues must not block a new open snapshot')
 if __name__=='__main__':unittest.main()
