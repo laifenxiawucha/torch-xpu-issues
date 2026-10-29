@@ -88,7 +88,7 @@ def reproduction_clues(body,test_paths,reported_version,markdown=''):
 def verification_candidates(comments):
  candidates=[]
  for c in reversed(comments):
-  if c['is_bot']:continue
+  if c['is_bot'] or c.get('is_generated'):continue
   for line in c['text'].splitlines():
    if found(r'(?i)\b(?:verified (?:with|on|using)|retested (?:with|on)|re-tested (?:with|on)|still fails?|no longer reproducible|not reproduced|cannot reproduce|test(?:s)? pass(?:es|ed)?|passes|still exists)\b',line) and not found(r'\b(?:please|will|should|can we|could you|need to|to be)\b',line):
     candidates.append({'date':c['created_at'][:10],'author':c['author'],'excerpt':line.strip()[:900],'source':'人工评论中的验证线索，未人工确认'})

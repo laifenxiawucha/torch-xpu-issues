@@ -4,6 +4,7 @@ from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from issue_facts import (IMPACT_TYPES, classify_impact,record_nature,discovery_channels,reproduction_clues,verification_candidates,blocker_info,repair_summary,reported_versions)
 from closure_review import review_issue, CASE_STATUS
+from evidence_context import generated_analysis, evidence_source
 REPO='intel/torch-xpu-ops'
 URL=re.compile(r'(?:https?://|www\.)[^\s<>\]\)"\x27]+',re.I)
 SCOPES=['算子/kernel','编译器/图执行','分布式/XCCL','运行时/驱动/设备','模型/端到端（根因待定位）','量化/torchao','对外 API/语义','Profiler/性能工具','构建/安装/工具链','测试/CI 基础设施','跟踪/规划','文档/术语','未知']
@@ -85,7 +86,10 @@ def render(raw,root):
  for i in raw['issues']:
   number=i['number'];key=str(number);title=i['title'];body=i['bodyText'];markdown=i.get('body','');label_list=[n['name'] for n in i['labels']['nodes']];labels='; '.join(label_list)
   age=(day-datetime.fromisoformat(i['createdAt'].replace('Z','+00:00')).date()).days
-  comments=clean([{'id':c.get('id',''),'author':c['author']['login'] if c.get('author') else '账号不可见','is_bot':not c.get('author') or c['author']['__typename']=='Bot' or c['author']['login'].lower().endswith(('bot','[bot]')),'created_at':c['createdAt'],'text':c['bodyText'],'markdown':c.get('body','')} for c in i['comments']['nodes']]);humans=[c for c in comments if not c['is_bot']];last=humans[-1] if humans else None
+  comments=clean([{'id':c.get('id',''),'author':c['author']['login'] if c.get('author') else '账号不可见','is_bot':not c.get('author') or c['author']['__typename']=='Bot' or c['author']['login'].lower().endswith(('bot','[bot]')),'created_at':c['createdAt'],'text':c['bodyText'],'markdown':c.get('body','')} for c in i['comments']['nodes']])
+  for c in comments:
+   c['is_generated']=generated_analysis(c['markdown'] or c['text']);c['provenance']=evidence_source(c['markdown'] or c['text'],c['is_bot'])
+  humans=[c for c in comments if not c['is_bot'] and not c['is_generated']];last=humans[-1] if humans else None
   linked_ids=list(dict.fromkeys(e['source']['id'] for e in i['timelineItems']['nodes'] if e.get('source',{}).get('__typename')=='PullRequest'))
   linked_ids=list(dict.fromkeys(linked_ids+closing_index.get(number,[])))
   linked=[dict(prs[id],explicit_fix_reference=any(x['number']==number and x['repository']['nameWithOwner']==REPO for x in raw_prs[id]['closingIssuesReferences']['nodes'])) for id in linked_ids if id in prs]
@@ -128,6 +132,13 @@ def render(raw,root):
   row.update({'closure_candidate':'1' if closing['candidate'] else '0','closure_status':closing['status'],'closure_reasons':'；'.join(closing['reasons']) or '暂无关闭候选依据','closure_case_total':str(closing['total']),'closure_declared_total':str(closing['declared_total'] or ''),'closure_case_disposed':str(closing['disposed']),'closure_inventory_complete':'1' if closing['inventory_complete'] else '0','closure_blockers':'；'.join(closing['blockers']),'closure_checks':'；'.join(closing['checks']),'closure_latest_evidence':closing['latest_evidence_at']})
   for status,count in closing['counts'].items():row['closure_case_'+status]=str(count)
   row['closure_configuration_status']=closing['configuration']['status']
+  row['target_branch']='；'.join(extract(r'\brelease/\d+\.\d+\b',title))
+  row['merged_fix_pr_count']=str(len(fix_merged))
+  row['review_kind']=closing['configuration']['kind']
+  counts=closing['counts']
+  row['next_action']=f"复核 {counts['failed']} 个仍失败或无法验证的用例" if closing['candidate'] and counts['failed'] else f"核对 {counts['conditional']+counts['workaround']} 个受限通过用例的原条件与后续处理" if closing['candidate'] and (counts['conditional'] or counts['workaround']) else '按原参数及编译器验证修复后的构建' if row['review_kind']=='构建问题' else f"补充 {counts['unknown']} 个用例的处理证据" if closing['candidate'] and counts['unknown'] else '确认 skip / xfail 的保留原因及跟踪去向' if closing['candidate'] and counts['skipped'] else '补充原环境及目标分支的复测证据' if closing['candidate'] and closing['configuration']['checks'] else action
+  row['missing_evidence']='；'.join(dict.fromkeys(closing['blockers']+closing['checks'])) if closing['candidate'] or row['review_kind']=='构建问题' else row['repro_gaps']
+  row['engineering_action']=row['next_action']
   detail={'body_text':body if not markdown else '','body_markdown':markdown,'comments':comments,'last_human_comment_excerpt':last['text'] if last else '', 'repro_commands':clues['repro_commands'],'repro_code_excerpt':clues['repro_code_excerpt'],'repro_code_blocks':clues['repro_code_blocks'],'verification_candidates':candidates,'review':review}
   detail['closure_review']=closing
   rows.append(clean(row));details[key]=clean(detail)

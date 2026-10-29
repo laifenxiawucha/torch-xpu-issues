@@ -39,6 +39,7 @@ class ReviewIntegrityTests(unittest.TestCase):
             result=render(raw,Path(tmp))
         self.assertEqual(result['rows'][0]['repair_pr_status'],'明确关闭引用 PR 进行中')
         self.assertEqual(result['rows'][0]['explicit_fix_pr_count'],'1')
+        self.assertEqual(result['rows'][0]['engineering_action'],result['rows'][0]['next_action'])
 
 
 if __name__=='__main__':unittest.main()

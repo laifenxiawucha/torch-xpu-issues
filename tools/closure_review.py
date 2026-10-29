@@ -6,7 +6,7 @@ inventories, historical crossings and temporary skips remain visible to reviewer
 import re
 from collections import Counter
 from case_inventory import case_identity, inventory, issue_inventory, identifiers
-from evidence_context import evidence_scope, configuration_check
+from evidence_context import evidence_scope, configuration_check, evidence_source, generated_analysis, result_context, pass_conditions, review_kind
 
 REPO = 'intel/torch-xpu-ops'
 CASE_STATUS = {
@@ -14,6 +14,7 @@ CASE_STATUS = {
     'skipped': '已 skip / xfail', 'obsolete': '测试已删除 / 替换',
     'transferred': '已转移跟踪', 'crossed': '已划掉，结论待确认',
     'failed': '有失败反馈', 'unknown': '处理未知',
+    'conditional': '调整条件后有通过记录', 'workaround': '绕过问题后有通过记录',
 }
 DISPOSED = {'passed', 'fixed', 'skipped', 'obsolete', 'transferred'}
 PLAN = re.compile(r'\b(?:please|will|should|could|would|might|maybe|plan(?:ned)?|need(?:s)? to|to be|until|once|only (?:when|after)|not yet)\b', re.I)
@@ -111,16 +112,19 @@ def review_issue(issue, linked, targets=None, runs=None):
     closure = [p for p in linked if p['explicit_fix_reference']]
     merged = [p for p in closure if p['state'] == 'MERGED']
     opened = [p for p in closure if p['state'] == 'OPEN']
-    evidence, blockers, cautions, reasons, related = [], [], [], [], []
+    evidence, blockers, cautions, reasons, related, suggestions = [], [], [], [], [], []
     latest_negative = ''
     latest_positive = ''
     duplicate = False
     transfer = False
     source_texts = [(markdown, issue['updatedAt'], (issue.get('author') or {}).get('login', '报告者'), 'Issue 正文', False, '')]
-    source_texts += [(c.get('body') or c['bodyText'], c['createdAt'], (c.get('author') or {}).get('login', '账号不可见'), 'Bot 评论' if _is_bot(c) else '人工评论', _is_bot(c), c.get('id','')) for c in comments]
+    source_texts += [(c.get('body') or c['bodyText'], c['createdAt'], (c.get('author') or {}).get('login', '账号不可见'), evidence_source(c.get('body') or c['bodyText'], _is_bot(c)), _is_bot(c), c.get('id','')) for c in comments]
     for text, date, author, source, bot, comment_id in source_texts:
         scope = evidence_scope('\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('>')), runs)
         trusted_nightly = bot and author in ('github-actions', 'github-actions[bot]') and 'Passed in' in text and 'nightly testing' in text
+        if generated_analysis(text):
+            suggestions.append(_evidence(text, date, author, '自动分析建议', '自动建议，需独立核查', scope, comment_id))
+            continue
         # Agent narratives and commands never become proof of a completed disposition.
         if bot and not trusted_nightly:
             continue
@@ -133,7 +137,7 @@ def review_issue(issue, linked, targets=None, runs=None):
             if line.strip().startswith('>') or re.search(r'^\s*@\w+\s+(?:fix|repro)', line):
                 continue
             # A short status heading may apply to an immediately following test list.
-            context = line
+            context = result_context(line, text)
             if re.search(r'(?i)\b(?:fixed|skipped|passed|deleted|removed|renamed|tracked in)\b', line) and not re.search(r'\btest_\w+', line):
                 tail = []
                 for following in lines[idx + 1:]:
@@ -148,8 +152,10 @@ def review_issue(issue, linked, targets=None, runs=None):
         for context in groups:
             refs = references(context)
             matching = list(_matching_cases(context, cases, lookup))
+            restricted_status, restricted_note = pass_conditions(context)
+            restricted_pass = restricted_status != 'passed' and bool(re.search(r'(?i)\b(?:passed|passes)\b', context)) and not PLAN.search(context.splitlines()[0])
             specific_failure = source != 'Issue 正文' and not trusted_nightly and bool(matching) and re.search(r'(?i)\b(?:fails?|failed|hangs?|crash(?:es|ed)?)\b', context) and not PLAN.search(context) and not re.search(r'(?i)\b(?:before|previously|used to|no longer|now pass\w*|not fail\w*|doesn.t fail\w*)\b', context)
-            negative = bool(NEGATIVE.search(context) or specific_failure)
+            negative = not restricted_pass and bool(NEGATIVE.search(context) or specific_failure)
             if negative and source != 'Issue 正文':
                 item = _evidence(context, date, author, source, '失败或未完成反馈', scope, comment_id)
                 evidence.append(item)
@@ -171,7 +177,9 @@ def review_issue(issue, linked, targets=None, runs=None):
             if not matching:
                 continue
             status = None
-            if negative:
+            if restricted_pass:
+                status = restricted_status
+            elif negative:
                 status = 'failed'
             elif trusted_nightly or global_pass or (source != 'Issue 正文' or context.lstrip().startswith('|')) and re.search(r'(?i)\b(?:passed|passes|now passing|verified passing)\b', context) and not PLAN.search(context) and not re.search(r'(?i)\b(?:fail\w*|hang\w*|crash\w*|baseline|isolation|alone|previous|earlier|rest of|other tests)\b', context):
                 status = 'passed'
@@ -185,6 +193,9 @@ def review_issue(issue, linked, targets=None, runs=None):
             elif is_transfer and valid_targets and not PLAN.search(context):
                 status = 'transferred'
             if status:
+                condition_note = restricted_note if restricted_pass else ''
+                if status == 'passed':
+                    status, condition_note = pass_conditions(context)
                 item = _evidence(context, date, author, source, CASE_STATUS[status], scope, comment_id)
                 evidence.append(item)
                 if status in DISPOSED:
@@ -194,6 +205,7 @@ def review_issue(issue, linked, targets=None, runs=None):
                     if case['evidence'] and source == 'Issue 正文':
                         continue
                     case['status'] = status
+                    case['condition_note'] = condition_note
                     case['evidence'] = (case['evidence'] + [_evidence(context, date, author, source, CASE_STATUS[status], scope, comment_id, case)])[-3:]
     for case in cases:
         if case['status'] == 'unknown' and case['crossed']:
@@ -209,6 +221,8 @@ def review_issue(issue, linked, targets=None, runs=None):
             evidence.append(_evidence(f"{p['repository']}#{p['number']} · {p['title']} · MERGED · 目标 {p['base']}", p.get('merged_at') or p['updated_at'], 'GitHub PR 状态', 'PR', '关闭引用 PR 已合并'))
     if total and complete and disposed == total:
         reasons.append('失败清单已有处理结论')
+    elif total and complete and all(c['status'] in DISPOSED | {'conditional', 'workaround'} for c in cases):
+        reasons.append('失败清单已有处理线索（含受限通过）')
     elif complete and marked:
         reasons.append('清单均有处理记录或删除线')
     if duplicate:
@@ -219,6 +233,8 @@ def review_issue(issue, linked, targets=None, runs=None):
         blockers.append(f'仍有 {len(opened)} 个明确关闭引用 PR 未合并')
     if counts['failed']:
         blockers.append(f"{counts['failed']} 个用例有失败或无法验证反馈")
+    if counts['conditional'] or counts['workaround']:
+        cautions.append(f"{counts['conditional'] + counts['workaround']} 个用例仅在调整条件或绕过问题后通过；需核对原条件和后续处理")
     # A later positive for one test does not clear a release-wide failure report.
     negative_items = [e for e in evidence if e['kind'] == '失败或未完成反馈']
     unresolved_negative = [e for e in negative_items if re.search(r'(?i)release|pre.release|2\.\d+|do not close|issue still|still persists|still failing', e['excerpt'])]
@@ -234,9 +250,9 @@ def review_issue(issue, linked, targets=None, runs=None):
     residual = bool(re.search(r'(?i)^\s*\[skip-added\]|reason for skip|real fix.*needs|follow.up:.*(?:implement|enable|remove)', title + '\n' + markdown))
     if residual:
         blockers.append('本条仍承载 skip 原因、能力缺口或恢复测试的后续工作')
-    if not total:
+    if not total and review_kind(issue, cases) != '构建问题':
         cautions.append('未识别到可完整核对的失败用例清单；不代表没有剩余用例')
-    elif not complete:
+    elif total and not complete:
         cautions.append('清单解析不完整或原文仅列部分用例，处理覆盖未知')
     if counts['unknown']:
         cautions.append(f"{counts['unknown']} 个用例处理未知")
@@ -275,7 +291,7 @@ def review_issue(issue, linked, targets=None, runs=None):
     return {'candidate': is_candidate, 'status': status, 'reasons': reasons,
             'counts': {k: counts[k] for k in CASE_STATUS}, 'total': total,
             'disposed': disposed, 'inventory_complete': bool(total and complete),
-            'declared_total': declared_total, 'configuration': configuration, 'related_records': related,
+            'declared_total': declared_total, 'configuration': configuration, 'related_records': related, 'analysis_suggestions': suggestions,
             'unparsed_lines': unparsed, 'blockers': list(dict.fromkeys(blockers)),
             'checks': list(dict.fromkeys(cautions)), 'evidence': unique,
             'cases': cases, 'latest_evidence_at': unique[0]['date'] if unique else ''}

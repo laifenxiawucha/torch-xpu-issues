@@ -1,5 +1,6 @@
 """Parse declared test lists and human result tables, excluding incidental logs."""
 import re
+from evidence_context import generated_analysis
 
 IDENTIFIER = re.compile(
     r'\b\w+,[\w.-]+,test_[\w\[\].=,+:/-]+|'
@@ -57,6 +58,10 @@ def _merge(cases, value, key, line, origin):
             'status': 'unknown', 'evidence': [], 'inventory_source': origin}
     if key in cases:
         cases[key]['crossed'] &= crossed
+        if origin == '人工评论结果表' and value != cases[key]['name']:
+            aliases = cases[key].setdefault('aliases', [])
+            if value not in aliases:
+                aliases.append(value)
     else:
         # Match a qualified alias with an existing unqualified declaration only
         # if that name is unique. Never merge two different modules or classes.
@@ -144,6 +149,8 @@ def issue_inventory(issue):
         if author.get('__typename') == 'Bot' or author.get('login', '').lower().endswith(('bot', '[bot]')):
             continue
         markdown=comment.get('body') or ''
+        if generated_analysis(markdown or comment.get('bodyText', '')):
+            continue
         relocated=bool(re.search(r'(?is)(?:files?|\.py`).{0,100}(?:removed|moved|renamed)|cases now run from.*upstream',markdown))
         for row in result_table_rows(markdown):
             if relocated and row['key'] not in indexed:
