@@ -5,16 +5,21 @@ from pathlib import Path
 from issue_facts import (IMPACT_TYPES, classify_impact,record_nature,discovery_channels,reproduction_clues,verification_candidates,blocker_info,repair_summary,reported_versions)
 from closure_review import review_issue, CASE_STATUS
 from evidence_context import generated_analysis, evidence_source
+from team_review import review_summary, TEAM_STATES, ROLE_LABELS
 REPO='intel/torch-xpu-ops'
 URL=re.compile(r'(?:https?://|www\.)[^\s<>\]\)"\x27]+',re.I)
 SCOPES=['算子/kernel','编译器/图执行','分布式/XCCL','运行时/驱动/设备','模型/端到端（根因待定位）','量化/torchao','对外 API/语义','Profiler/性能工具','构建/安装/工具链','测试/CI 基础设施','跟踪/规划','文档/术语','未知']
 def clean(value):
  if isinstance(value,str):
   def replacement(hit):
+   # Markdown delimiters can touch a bare URL. They describe the surrounding
+   # task, so removing the address must not erase its closing strike/check.
+   suffix=re.search(r'([~*`]+[.,;:!?]*)$',hit.group(0))
+   tail=suffix.group(1) if suffix else ''
    run=re.search(r'github\.com/([\w.-]+/[\w.-]+)/actions/runs/(\d+)',hit.group(0),re.I)
-   if run:return '[运行记录：'+run.group(1)+'@run:'+run.group(2)+']'
+   if run:return '[运行记录：'+run.group(1)+'@run:'+run.group(2)+']'+tail
    ref=re.search(r'github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)',hit.group(0),re.I)
-   return '[地址已移除：'+ref.group(1)+'#'+ref.group(2)+']' if ref else '[地址已移除]'
+   return ('[地址已移除：'+ref.group(1)+'#'+ref.group(2)+']' if ref else '[地址已移除]')+tail
   return URL.sub(replacement,value)
  if isinstance(value,list):return [clean(v) for v in value]
  if isinstance(value,dict):return {k:clean(v) for k,v in value.items()}
@@ -55,7 +60,7 @@ def pr_details(p):
  elif rollup.get('state') in ['PENDING','EXPECTED']:stage='CI 进行中'
  elif p['mergeStateStatus']=='CLEAN' and rollup.get('state')=='SUCCESS':stage='检查通过，合入条件待核对'
  else:stage='Open，状态待核查'
- return clean({'id':p['id'],'number':p['number'],'repository':p['repository']['nameWithOwner'],'title':p['title'],'state':p['state'],'stage':stage,'is_draft':p['isDraft'],'review':p['reviewDecision'] or '未提供','checks':rollup.get('state','未提供'),'mergeable':p['mergeable'],'merge_state':p['mergeStateStatus'],'failed_checks':failed,'check_details_complete':len(checks)==connection.get('totalCount',0),'base':p['baseRefName'],'head':p['headRefName'],'updated_at':p['updatedAt'],'merged_at':p.get('mergedAt'),'changed_files':p['changedFiles'],'commit':commit.get('oid',''),'review_requests':[n['requestedReviewer'].get('login',n['requestedReviewer'].get('name','')) for n in p['reviewRequests']['nodes'] if n.get('requestedReviewer')]})
+ return clean({'author':(p.get('author') or {}).get('login',''),'review_users':[n['requestedReviewer']['login'] for n in p['reviewRequests']['nodes'] if (n.get('requestedReviewer') or {}).get('login')],'review_teams':[n['requestedReviewer'].get('slug',n['requestedReviewer'].get('name','')) for n in p['reviewRequests']['nodes'] if (n.get('requestedReviewer') or {}).get('__typename')=='Team' or (n.get('requestedReviewer') or {}).get('name')],'id':p['id'],'number':p['number'],'repository':p['repository']['nameWithOwner'],'title':p['title'],'state':p['state'],'stage':stage,'is_draft':p['isDraft'],'review':p['reviewDecision'] or '未提供','checks':rollup.get('state','未提供'),'mergeable':p['mergeable'],'merge_state':p['mergeStateStatus'],'failed_checks':failed,'check_details_complete':len(checks)==connection.get('totalCount',0),'base':p['baseRefName'],'head':p['headRefName'],'updated_at':p['updatedAt'],'merged_at':p.get('mergedAt'),'changed_files':p['changedFiles'],'commit':commit.get('oid',''),'review_requests':[n['requestedReviewer'].get('login',n['requestedReviewer'].get('name','')) for n in p['reviewRequests']['nodes'] if n.get('requestedReviewer')]})
 def load_overrides(path,ids):
  if not path.exists():return {}
  data=json.loads(path.read_text());assert data.get('schema_version')==1,'Unsupported override schema'
@@ -141,14 +146,27 @@ def render(raw,root):
   row['engineering_action']=row['next_action']
   detail={'body_text':body if not markdown else '','body_markdown':markdown,'comments':comments,'last_human_comment_excerpt':last['text'] if last else '', 'repro_commands':clues['repro_commands'],'repro_code_excerpt':clues['repro_code_excerpt'],'repro_code_blocks':clues['repro_code_blocks'],'verification_candidates':candidates,'review':review}
   detail['closure_review']=closing
+  team=review_summary(i,closing,linked)
+  row['issue_author']=(i.get('author') or {}).get('login','')
+  row['review_people_summary']='；'.join('@'+p['login']+'（'+ROLE_LABELS[p['role']]+'，'+p['reference']+'）' for p in team['people'])
+  row['review_pr_summary']='；'.join(p['repository']+'#'+str(p['number'])+' · '+p['state']+' · @'+(p['author'] or '未提取')+' · '+('明确关闭引用' if p['explicit_fix_reference'] else '普通交叉引用') for p in linked)
+  row['team_review_candidate']='1' if team['candidate'] else '0'
+  row['team_review_status']=team['status'] if team['candidate'] else '未提取到关闭线索'
+  row['team_review_rank']=str(team['rank'])
+  row['team_review_reasons']='；'.join(team['reasons'])
+  row['team_review_blockers']='；'.join(team['blockers'])
+  row['team_review_checks']='；'.join(team['checks'])
+  row['body_task_summary']=team['body_summary']
+  row['review_people']=team['people']
+  detail['team_review']=team
   rows.append(clean(row));details[key]=clean(detail)
- data={'schema_version':5,'repository':REPO,'snapshot':stamp,'fetched_at':raw['fetched_at'],'started_at':raw['started_at'],'snapshot_local':snapshot.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),'rows':rows,'prs':prs,'impact_types':IMPACT_TYPES,'scopes':SCOPES,'case_statuses':CASE_STATUS,'workflow_runs':raw.get('workflow_runs',{}),'collection':{'comments_complete':True,'timelines_complete':True,'linked_pr_count':len(prs),'review_target_count':len(raw.get('review_targets',{})),'workflow_run_count':len(raw.get('workflow_runs',{})),'workflow_run_available':sum(bool(x.get('available')) for x in raw.get('workflow_runs',{}).values()),'markdown_comment_count':sum(bool(c.get('body')) for i in raw['issues'] for c in i['comments']['nodes']),'comment_count':sum(len(x['comments']) for x in details.values()),'open_set_verified_at':raw.get('open_set_verified_at',raw['fetched_at']),'issue_count_verified':raw['total_count']}}
- data['fields']=[k for k in rows[0] if k!='linked_prs']
+ data={'schema_version':6,'repository':REPO,'snapshot':stamp,'fetched_at':raw['fetched_at'],'started_at':raw['started_at'],'snapshot_local':snapshot.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),'rows':rows,'prs':prs,'impact_types':IMPACT_TYPES,'scopes':SCOPES,'case_statuses':CASE_STATUS,'team_states':TEAM_STATES,'team_roles':ROLE_LABELS,'people_fetched_at':raw.get('people_fetched_at',raw['fetched_at']),'workflow_runs':raw.get('workflow_runs',{}),'collection':{'comments_complete':True,'timelines_complete':True,'linked_pr_count':len(prs),'review_target_count':len(raw.get('review_targets',{})),'workflow_run_count':len(raw.get('workflow_runs',{})),'workflow_run_available':sum(bool(x.get('available')) for x in raw.get('workflow_runs',{}).values()),'markdown_comment_count':sum(bool(c.get('body')) for i in raw['issues'] for c in i['comments']['nodes']),'comment_count':sum(len(x['comments']) for x in details.values()),'open_set_verified_at':raw.get('open_set_verified_at',raw['fetched_at']),'issue_count_verified':raw['total_count']}}
+ data['fields']=[k for k in rows[0] if k not in ('linked_prs','review_people')]
  inventory=root/f'torch-xpu-ops-issue-inventory-{stamp}.csv'
  for path,items in [(inventory,rows),(root/f'torch-xpu-ops-aged-issues-{stamp}.csv',[r for r in rows if int(r['age_days'])>180])]:
   with path.open('w',encoding='utf-8-sig',newline='') as f:
    writer=csv.DictWriter(f,fieldnames=data['fields'],extrasaction='ignore',lineterminator='\n');writer.writeheader();writer.writerows(items)
- template=(Path(__file__).parent/'report-template.html').read_text();css=(Path(__file__).parent/'report.css').read_text();js=(Path(__file__).parent/'report.js').read_text()
+ template=(Path(__file__).parent/'report-template.html').read_text();css=(Path(__file__).parent/'report.css').read_text();js=(Path(__file__).parent/'team-review.js').read_text()+'\n'+(Path(__file__).parent/'report.js').read_text()
  scripts='\n'.join('<script type="application/json" id="detail-'+key+'">'+encode(detail)+'</script>' for key,detail in details.items())
  html=template.replace('__REPORT_STYLE__',css).replace('__REPORT_SCRIPT__',js).replace('__REPORT_DATA__',encode(data)).replace('__DETAIL_SCRIPTS__',scripts).replace('__SNAPSHOT_LOCAL__',data['snapshot_local']).replace('__TOTAL__',str(len(rows)))
  assert not re.search(r'https?://|www\.',html,re.I),'No external URLs in report'

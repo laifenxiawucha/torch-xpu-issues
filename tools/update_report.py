@@ -21,9 +21,9 @@ QUERY='''query($cursor:String) { repository(owner:"intel",name:"torch-xpu-ops") 
  }}
  } } } }'''
 PR_QUERY='''query($ids:[ID!]!){nodes(ids:$ids){... on PullRequest{
- id number title state mergedAt updatedAt isDraft reviewDecision mergeable mergeStateStatus
+ id number title state mergedAt updatedAt isDraft reviewDecision mergeable mergeStateStatus author{login __typename}
  repository{nameWithOwner} baseRefName headRefName additions deletions changedFiles
- reviewRequests(first:100){totalCount nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
+ reviewRequests(first:100){totalCount nodes{requestedReviewer{__typename ... on User{login} ... on Team{name slug}}}}
  closingIssuesReferences(first:100){totalCount nodes{number repository{nameWithOwner}}}
  commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:100){totalCount nodes{
  __typename ... on CheckRun{name conclusion status} ... on StatusContext{context state}
@@ -133,6 +133,19 @@ def collect_workflow_runs(raw):
  print(f'Workflow runs: {len(results)} checked, {sum(r["available"] for r in results.values())} available',flush=True)
  return results
 
+def enrich_people(raw):
+ """Fill PR identity without changing the issue/body snapshot timestamp."""
+ query='''query($ids:[ID!]!){nodes(ids:$ids){... on PullRequest{id author{login __typename} reviewRequests(first:100){totalCount nodes{requestedReviewer{__typename ...on User{login} ...on Team{name slug}}}}}}}'''
+ indexed={p['id']:p for p in raw['prs']};ids=sorted(indexed)
+ for pos in range(0,len(ids),30):
+  for node in api(query,{'ids':ids[pos:pos+30]})['nodes']:
+   assert node and node['id'] in indexed,'Missing PR identity record'
+   connection=node['reviewRequests'];assert connection['totalCount']==len(connection['nodes']),'Truncated reviewer list'
+   indexed[node['id']]['author']=node['author'];indexed[node['id']]['reviewRequests']=connection
+  print(f'PR people: {min(pos+30,len(ids))}/{len(ids)}',flush=True)
+ raw['people_fetched_at']=datetime.now(timezone.utc).isoformat()
+ return raw
+
 def collect_review_targets(raw):
  refs=set()
  for issue in raw['issues']:
@@ -154,10 +167,13 @@ def collect_review_targets(raw):
   print(f'Review follow-ups: {min(pos+30,len(items))}/{len(items)}',flush=True)
  return targets
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--collect-only',action='store_true');p.add_argument('--cached',type=Path);p.add_argument('--output-dir',type=Path,default=ROOT);args=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--collect-only',action='store_true');p.add_argument('--cached',type=Path);p.add_argument('--refresh-people',action='store_true',help='Refresh PR authors/review requests in the cached snapshot; keeps its issue timestamp');p.add_argument('--output-dir',type=Path,default=ROOT);args=p.parse_args()
+ if args.refresh_people and not args.cached:p.error('--refresh-people requires --cached')
  if args.cached:raw=json.loads(args.cached.read_text())
  else:
   raw=collect();CACHE.mkdir(parents=True,exist_ok=True);path=CACHE/(raw['fetched_at'][:10]+'.json');path.write_text(json.dumps(raw,ensure_ascii=False));print('Saved snapshot:',path,flush=True)
+ if args.refresh_people:
+  raw=enrich_people(raw);args.cached.write_text(json.dumps(raw,ensure_ascii=False))
  if not args.collect_only:
   from render_report import render
   args.output_dir.mkdir(parents=True,exist_ok=True)

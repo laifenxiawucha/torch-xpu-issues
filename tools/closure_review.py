@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from case_inventory import case_identity, inventory, issue_inventory, identifiers
 from evidence_context import evidence_scope, configuration_check, evidence_source, generated_analysis, result_context, pass_conditions, review_kind
+from body_tasks import task_marks
 
 REPO = 'intel/torch-xpu-ops'
 CASE_STATUS = {
@@ -112,7 +113,7 @@ def review_issue(issue, linked, targets=None, runs=None):
     closure = [p for p in linked if p['explicit_fix_reference']]
     merged = [p for p in closure if p['state'] == 'MERGED']
     opened = [p for p in closure if p['state'] == 'OPEN']
-    evidence, blockers, cautions, reasons, related, suggestions = [], [], [], [], [], []
+    evidence, blockers, cautions, reasons, related, suggestions, proposals = [], [], [], [], [], [], []
     latest_negative = ''
     latest_positive = ''
     duplicate = False
@@ -151,6 +152,8 @@ def review_issue(issue, linked, targets=None, runs=None):
             groups.append(context)
         for context in groups:
             refs = references(context)
+            if not bot and source != 'Issue 正文' and not PLAN.search(context) and not NEGATIVE.search(context) and not re.search(r'(?i)\b(?:if|after|unless|when)\b|如果|之后|才能|是否|[?？]', context) and re.search(r'(?i)\b(?:this issue (?:is (?:now )?(?:fixed|resolved)|can (?:now )?be closed)|(?:I|we) (?:confirm|verified).{0,60}(?:resolved|fixed)|closing as duplicate)\b|(?:此|这个)问题(?:已解决|可以关闭)', context):
+                proposals.append(_evidence(context, date, author, source, '人工提出已解决或可关闭，待本人核对', scope, comment_id))
             matching = list(_matching_cases(context, cases, lookup))
             restricted_status, restricted_note = pass_conditions(context)
             restricted_pass = restricted_status != 'passed' and bool(re.search(r'(?i)\b(?:passed|passes)\b', context)) and not PLAN.search(context.splitlines()[0])
@@ -292,6 +295,7 @@ def review_issue(issue, linked, targets=None, runs=None):
             'counts': {k: counts[k] for k in CASE_STATUS}, 'total': total,
             'disposed': disposed, 'inventory_complete': bool(total and complete),
             'declared_total': declared_total, 'configuration': configuration, 'related_records': related, 'analysis_suggestions': suggestions,
+            'body_tasks': task_marks(markdown), 'human_proposals': proposals,
             'unparsed_lines': unparsed, 'blockers': list(dict.fromkeys(blockers)),
             'checks': list(dict.fromkeys(cautions)), 'evidence': unique,
             'cases': cases, 'latest_evidence_at': unique[0]['date'] if unique else ''}

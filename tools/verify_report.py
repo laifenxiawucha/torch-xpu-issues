@@ -15,7 +15,12 @@ class Markup(HTMLParser):
 def verify(html,snapshot):
  text=html.read_text();source=json.loads(snapshot.read_text());data=json.loads(re.search(r'<script type="application/json" id="report-data">(.*?)</script>',text,re.S).group(1))
  details={number:json.loads(encoded) for number,encoded in re.findall(r'<script type="application/json" id="detail-(\d+)">(.*?)</script>',text,re.S)}
- originals={str(i['number']):i for i in source['issues']};assert len(data['rows'])==len(originals)==source['total_count'];assert len(details)==len(originals)
+ originals={str(i['number']):i for i in source['issues']};raw_prs={p['id']:p for p in source['prs']};assert len(data['rows'])==len(originals)==source['total_count'];assert len(details)==len(originals)
+ assert data['schema_version']==6 and data['people_fetched_at']==source.get('people_fetched_at',source['fetched_at'])
+ for key,pr in data['prs'].items():
+  original=raw_prs[key]
+  assert pr['author']==(original.get('author') or {}).get('login','')
+  assert pr['review_users']==[x['requestedReviewer']['login'] for x in original['reviewRequests']['nodes'] if (x.get('requestedReviewer') or {}).get('login')]
  assert 'delta' not in data and not re.search(r'https?://|www\.',text,re.I)
  assert set(originals)=={r['issue'] for r in data['rows']}
  for r in data['rows']:
@@ -38,6 +43,29 @@ def verify(html,snapshot):
   assert r['primary_blocker'] not in ['公开记录未显示负责人','长期没有公开进展']
   if r['classification_review']=='未人工核查':assert r['latest_verified_version']=='未确认'
   closure=detail['closure_review']
+  team=detail['team_review'];body=closure['body_tasks']
+  assert sum(body[k] for k in ['marked','remaining','uncertain'])==body['total']==len(body['items'])
+  assert not body['all_marked'] or body['scope_complete'] and body['marked']==body['total']>0
+  for item in body['items']:
+   assert item['text'].splitlines()[0] in clean(i.get('body') or i['bodyText']).splitlines()[item['line']-1]
+  expected_people=set();reference='intel/torch-xpu-ops#'+r['issue']
+  for user in i['assignees']['nodes']:expected_people.add((user['login'],'assignee',reference))
+  if i.get('author'):expected_people.add((i['author']['login'],'reporter',reference))
+  for pr in linked:
+   reference=pr['repository']+'#'+str(pr['number'])
+   if pr['author']:expected_people.add((pr['author'],'pr_author',reference))
+   for login in pr['review_users']:expected_people.add((login,'reviewer',reference))
+  assert {(p['login'],p['role'],p['reference']) for p in r['review_people']}==expected_people
+  assert r['review_people']==team['people']
+  assert all('@'+p['login'] in r['review_people_summary'] and p['reference'] in r['review_people_summary'] for p in team['people'])
+  assert all(p['repository']+'#'+str(p['number']) in r['review_pr_summary'] for p in linked)
+  assert (r['team_review_candidate']=='1')==team['candidate']==bool(team['reasons'])
+  assert r['team_review_reasons']=='；'.join(team['reasons']) and r['team_review_blockers']=='；'.join(team['blockers'])
+  assert r['team_review_rank']==str(team['rank'])
+  if team['candidate']:
+   assert r['team_review_status']==team['status']==data['team_states'][team['rank']]
+   assert (team['rank']==2)==bool(team['blockers'])
+  if body['has_signal']:assert any('正文' in x for x in team['reasons'])
   assert len(closure['cases'])==closure['total']==int(r['closure_case_total'])
   assert sum(closure['counts'].values())==closure['total']
   assert closure['disposed']==int(r['closure_case_disposed'])
@@ -66,7 +94,7 @@ def verify(html,snapshot):
   assert len(records)==len(data['rows']);assert reader.fieldnames==data['fields']
   for row,expected in zip(records,data['rows']):assert all(row[k]==str(expected[k]) for k in data['fields'])
  assert data['collection']['comment_count']==sum(len(d['comments']) for d in details.values())
- print(f"PASS: {len(originals)} issues, {data['collection']['comment_count']} comments, {len(data['prs'])} distinct PRs, lazy detail blocks, source correspondence, CSV, unique IDs, no backlinks/external resources.")
+ print(f"PASS: {len(originals)} issues, {data['collection']['comment_count']} comments, {len(data['prs'])} distinct PRs, exact person/role/PR routing, body marks and team groups, lazy detail blocks, source correspondence, CSV, unique IDs, no backlinks/external resources.")
  return data
 if __name__=='__main__':
  parser=argparse.ArgumentParser();parser.add_argument('html',type=Path);parser.add_argument('snapshot',type=Path);args=parser.parse_args();verify(args.html,args.snapshot)

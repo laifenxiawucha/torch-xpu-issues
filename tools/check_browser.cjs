@@ -10,7 +10,7 @@ const url=process.argv[2]||'file://'+path.resolve(__dirname,'../index.html');
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/^https?:/.test(r.url())&&new URL(r.url()).origin!==new URL(url).origin)external.push(r.url());});
  await page.goto(url,{waitUntil:'networkidle'});const data=await page.evaluate(()=>D),rows=data.rows;
  const count=async()=>Number((await page.locator('#resultCount').innerText()).split(' ')[0]);
- assert.equal(await count(),rows.length);assert.equal(data.delta,undefined);assert.equal(await page.evaluate(()=>detailCache.size),0,'details must not parse at startup');
+ assert.equal(await page.evaluate(()=>state.view),'closure');await page.locator('.view-switch [data-view="developer"]').click();assert.equal(await count(),rows.length);assert.equal(data.delta,undefined);assert.equal(await page.evaluate(()=>detailCache.size),0,'details must not parse at startup');
  assert.equal(await page.locator('#impactMatrix').getAttribute('open'),null,'matrix starts collapsed');
  const baselineCount=rows.length;
  const pick=async(key,value,{close=true,query=value}={})=>{const trigger=page.locator('#filter-'+key);if(!await trigger.isVisible())await page.locator('.advanced').evaluate(e=>e.open=true);if(await trigger.getAttribute('aria-expanded')!=='true')await trigger.click();await page.locator('#picker-search-'+key).fill(query);const checkbox=page.locator(`[data-option-key="${key}"][data-option-value="${value.replaceAll('"','\\"')}"]`);await checkbox.check();if(close)await page.locator(`[data-picker-close="${key}"]`).click();};

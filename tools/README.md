@@ -1,6 +1,6 @@
 # Issue 开发工作台生成器
 
-纯 Python 生成内嵌数据、样式和脚本的独立 HTML。无需前端构建或页面外部请求。桌面端工作台从整体分布、问题矩阵、开发队列进入清单，支持搜索、多选、撤销、浏览器历史和分享筛选状态。
+纯 Python 生成内嵌数据、样式和脚本的独立 HTML。无需前端构建或页面外部请求。桌面端默认进入 XPU 团队待审，按账号和四种明确角色找相关 Issue / PR。全部 Issue、整体分布、问题矩阵及开发队列保留；支持搜索、多选、撤销、浏览器历史和分享筛选状态。
 
 ## 重建已发布快照
 
@@ -28,15 +28,25 @@ python tools/update_report.py --output-dir .
 
 新快照保存在 `tools/snapshots/YYYY-MM-DD.json`，CSV 按日期输出。报告为静态快照，刷新网页不会触发 API 请求；此仓库不含自动定时任务。发布新快照前更新 `data/source-snapshot.json`，验证通过后提交 `index.html`、CSV 和快照。
 
+补充旧缓存中的 PR 作者和当前 Review 请求时，可执行：
+
+```sh
+python tools/update_report.py --cached tools/snapshots/YYYY-MM-DD.json --refresh-people --output-dir .
+```
+
+此命令更新所指定缓存中的 PR 人员字段，并记录 `people_fetched_at`；不改变 Issue / 正文快照时间。完整采集已包含 PR 作者。页面的数据质量区域分别展示这两个采集时间。
+
 ## 文件职责
 
 - `update_report.py`：GitHub 只读采集、分页和集合验证。
+- `body_tasks.py`：不依赖编号的正文处理标记，保留未完成子任务、部分划线与范围边界；排除代码和流程清单。
+- `team_review.py`：Issue 负责人、报告者、PR 作者、当前 Review 请求的精确人员关联，以及独立于验证证明的人工待审分组。
 - `case_inventory.py`：声明清单、多种 pytest 标识、人工 Markdown 结果表、显式迁移别名和解析覆盖。
 - `evidence_context.py`：运行编号、workflow / 分支 / 平台范围的核对。
 - `closure_review.py`：可解析用例清单、逐项处理证据、关闭候选原因、未完成事项与目标版本核对。
 - `issue_facts.py`：问题表现、记录性质、发现渠道、材料和验证候选线索。
 - `render_report.py`：分类、去重 PR、人工更正、CSV 与 HTML 输出。
-- `report-template.html`、`report.css`、`report.js`：模板、桌面布局和交互；生成时内联。
+- `report-template.html`、`report.css`、`report.js`、`team-review.js`：模板、桌面布局和交互；生成时内联。
 - `overrides.json`：实际应用的人工核查配置，默认空。
 - `test_issue_facts.py`、`verify_report.py`、`check_browser.cjs`：规则测试、数据验证与浏览器回归。
 
@@ -66,7 +76,7 @@ python tools/update_report.py --output-dir .
 
 ## 统计口径
 
-- 所有顶部指标均为 issue 条数；关联 PR 的去重数量单列，不把一对多引用混作 PR 数量。
+- 整体分布中的指标均为 issue 条数；关联 PR 的去重数量单列，不把一对多引用混作 PR 数量。
 - 关闭引用由 GitHub `closingIssuesReferences` 提供；普通交叉引用不计入关闭引用 PR 队列，也不能据其缺失断言没有修复。
 - 负责人字段和实际阻塞分开；没有 assignee、带 skipped 标签、较久没有人工评论均不自动证明阻塞。
 - `Unexpected success` 为测试预期需核对；`not implemented` 不自动代表新功能请求。
@@ -125,3 +135,11 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 - 核对路径按构建、测试、一般问题区分。人工复测使用平台、版本 / commit 和命令证据，不强制要求 workflow；CI 记录继续核对原 workflow、分支与平台。构建问题使用参数、编译器与修复后构建结果，不以测试清单缺失判定覆盖。
 - `target_branch` 仅保留标题明确声明的 release 分支，与仓库原始 Milestone 分列；不将 UT Backlog 当作版本。`merged_fix_pr_count` 用于区分至少一个引用已合并和有合并且无进行中引用两组 issue，原筛选值保留以兼容分享。
 - 开发清单展示 `next_action` 与 `missing_evidence`；用例搜索和状态筛选只影响详情中的用例，重开其他 issue 时重置，不改变外层筛选或导出集合。
+
+团队工作流回归：
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright AXE_MODULE=/path/to/axe.min.js node tools/check_team_browser.cjs
+```
+
+检查四种账号关系、分组、正文任务、筛选分享与导出、复制降级、浏览器历史、桌面布局和无外部请求；原有两套浏览器回归继续验证整体分析和逐项证据。
