@@ -1,6 +1,6 @@
 # 可重建的当前快照
 
-`source-snapshot.json` 是本次 GitHub 只读采集结果的地址清理副本，用于复现已发布报告。它包含 2026-10-30 的当前数据，不包含历史快照对比。
+`source-snapshot.json` 是本次 GitHub 只读采集结果的地址清理副本，用于复现已发布报告。它包含 2026-11-02 的当前数据，不包含历史快照对比。
 
 采集时独立核对了 Open issue 集合，完整获取评论和交叉引用，并核对后续跟踪记录的类型与状态。保存前移除外部地址；GitHub issue / PR 引用转换为仓库名与编号，Actions 引用保留运行编号，保留记录编号、日期、状态、标签、公开正文、代码缩进和评论内容（除地址）。
 
@@ -8,4 +8,4 @@
 
 评论同时保留原始 Markdown 与纯文本。`workflow_runs` 包含所引用公开运行记录的名称、workflow 路径、分支、commit 与可访问状态。整体运行结论不代替单个测试结果；运行记录不可访问或配置不匹配时保持待确认。
 
-当前快照还保留全部关联 PR 的 `author` 和 `reviewRequests`。补充人员采集时间在 `people_fetched_at` 中，Issue / 正文快照仍使用 `fetched_at`。只有明确账号字段用于团队关系，Team Review 请求不转换成个人账号。地址清理保留紧邻 URL 的 Markdown 删除线或加粗结束标记，支持按相同语义重建正文事项。
+当前快照还保留全部关联 PR 的 `author` 和 `reviewRequests`。人员字段随完整快照采集时使用 `fetched_at`；单独补充时另记 `people_fetched_at`，Issue / 正文快照时间保持不变。只有明确账号字段用于团队关系，Team Review 请求不转换成个人账号。地址清理保留紧邻 URL 的 Markdown 删除线或加粗结束标记，支持按相同语义重建正文事项。
