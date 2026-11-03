@@ -1,8 +1,8 @@
-# torch-xpu-ops · XPU 团队待审清单
+# torch-xpu-ops Issue 总览
 
 在线访问：https://laifenxiawucha.github.io/torch-xpu-issues/
 
-供 XPU 团队按账号找到相关 Issue 和 PR，阅读处理线索，由本人审核是否可以关闭。页面同时保留全部 Issue、整体分布、问题矩阵和开发队列。
+汇总 torch-xpu-ops 未关闭 Issue 的分布、修复进展与关闭核查线索，支持 XPU 团队按账号查找相关 Issue 和 PR。
 
 当前静态快照：**2026-11-03 13:53:17（北京时间）**。606 条未关闭 issue、428 个去重关联 PR、2680 条评论。页面展示当前快照，不含历史对比。
 
