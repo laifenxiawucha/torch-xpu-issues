@@ -28,13 +28,13 @@ const assert=require('node:assert/strict'),path=require('node:path');
  for(const id of ['4932','5049','2463']){const r=rows.find(x=>x.issue===id);if(r)assert.notEqual(r.surface_scope,'量化/torchao',id);}
  for(const [id,total] of [['4835',2],['4873',140],['4877',32]]){const r=rows.find(x=>x.issue===id);if(r)assert.equal(Number(r.closure_case_total),total,'review inventory regression '+id);}
  const otherCase=rows.find(r=>r.issue==='5837');if(otherCase)assert(!otherCase.closure_reasons.includes('后续跟踪'),'related sibling is not a transfer');
- const fp=rows.find(r=>r.issue==='4981');if(fp)assert.notEqual(fp.closure_status,'优先审查关闭','different dpclang/nightly configuration');
+ const fp=rows.find(r=>r.issue==='4981');if(fp)assert.notEqual(fp.closure_status,'优先核查关闭','different dpclang/nightly configuration');
  const targetVersion=rows.find(r=>r.issue==='4905');if(targetVersion){assert.match(targetVersion.reported_pytorch_version,/2\.14/);assert.match(targetVersion.baseline_pytorch_version,/2\.13/);}
  const reverse=rows.find(r=>r.issue==='5044');if(reverse)assert(Number(reverse.explicit_fix_pr_count)>0,'reverse PR reference retained');
  await page.evaluate(()=>showIssue('4436'));await page.locator('#caseDetails').evaluate(e=>e.open=true);await page.waitForFunction(()=>document.querySelectorAll('.case-record').length>0);const contextual=await page.evaluate(()=>getDetail('4436').closure_review.cases.filter(c=>c.status==='passed').every(c=>c.evidence.at(-1).excerpt.includes(c.name.split(',').at(-1))));assert(contextual,'each displayed evidence identifies the case');assert(await page.locator('.run-record').count()>0,'plain text workflow provenance visible');await page.keyboard.press('Escape');
  const release=rows.find(r=>r.issue==='4959');if(release)assert.equal(release.closure_status,'存在未完成事项');
- const skip=rows.find(r=>r.issue==='5329');if(skip)assert.notEqual(skip.closure_status,'优先审查关闭');
- for(const r of candidates){if(r.closure_status==='优先审查关闭'){assert.equal(r.closure_inventory_complete,'1');assert.equal(r.closure_case_disposed,r.closure_case_total);assert.equal(r.closure_blockers,'');assert.equal(r.closure_configuration_status,'已匹配公开配置字段');}}
+ const skip=rows.find(r=>r.issue==='5329');if(skip)assert.notEqual(skip.closure_status,'优先核查关闭');
+ for(const r of candidates){if(r.closure_status==='优先核查关闭'){assert.equal(r.closure_inventory_complete,'1');assert.equal(r.closure_case_disposed,r.closure_case_total);assert.equal(r.closure_blockers,'');assert.equal(r.closure_configuration_status,'已匹配公开配置字段');}}
  const mixed=await page.evaluate(()=>all.find(r=>r.pr_ci_failed==='1'&&linkedFor(r).filter(p=>p.explicit_fix_reference&&p.state==='OPEN').length>1)?.issue);if(mixed){const text=await page.evaluate(id=>repairCell(rowById.get(id)),mixed);assert.match(text,/CI 失败/);}
  // Distinguish milestone, target branch and the two merged-PR populations.
  await page.locator('.view-switch [data-view="developer"]').click();assert.match(await page.locator('#worklistHead').innerText(),/Milestone/);assert.match(await page.locator('#worklistHead').innerText(),/下一步动作/);assert.doesNotMatch(await page.locator('#worklistHead').innerText(),/目标版本/);

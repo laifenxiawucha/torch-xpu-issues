@@ -1,6 +1,6 @@
 # Issue 总览生成器
 
-纯 Python 生成内嵌数据、样式和脚本的独立 HTML。无需前端构建或页面外部请求。桌面端默认进入 XPU 团队待审，按账号和四种明确角色找相关 Issue / PR。全部 Issue、整体分布、问题矩阵及开发队列保留；支持搜索、多选、撤销、浏览器历史和分享筛选状态。
+纯 Python 生成内嵌数据、样式和脚本的独立 HTML。无需前端构建或页面外部请求。桌面端默认进入关闭核查，按账号和四种明确角色找相关 Issue / PR。未关闭 Issue、Issue 概览、分布矩阵及处理队列保留；支持搜索、多选、撤销、浏览器历史和分享筛选状态。
 
 ## 重建已发布快照
 
@@ -28,19 +28,19 @@ python tools/update_report.py --output-dir .
 
 新快照保存在 `tools/snapshots/YYYY-MM-DD.json`，CSV 按日期输出。报告为静态快照，刷新网页不会触发 API 请求；此仓库不含自动定时任务。发布新快照前更新 `data/source-snapshot.json`，验证通过后提交 `index.html`、CSV 和快照。
 
-补充旧缓存中的 PR 作者和当前 Review 请求时，可执行：
+补充旧缓存中的 PR 作者和当前评审请求时，可执行：
 
 ```sh
 python tools/update_report.py --cached tools/snapshots/YYYY-MM-DD.json --refresh-people --output-dir .
 ```
 
-此命令更新所指定缓存中的 PR 人员字段，并记录 `people_fetched_at`；不改变 Issue / 正文快照时间。完整采集已包含 PR 作者。页面的数据质量区域分别展示这两个采集时间。
+此命令更新所指定缓存中的 PR 人员字段，并记录 `people_fetched_at`；不改变 Issue / 正文快照时间。完整采集已包含 PR 作者。页面的数据说明区域分别展示这两个采集时间。
 
 ## 文件职责
 
 - `update_report.py`：GitHub 只读采集、分页和集合验证。
 - `body_tasks.py`：不依赖编号的正文处理标记，保留未完成子任务、部分划线与范围边界；排除代码和流程清单。
-- `team_review.py`：Issue 负责人、报告者、PR 作者、当前 Review 请求的精确人员关联，以及独立于验证证明的人工待审分组。
+- `team_review.py`：Issue 负责人、报告者、PR 作者、当前评审请求的精确人员关联，以及独立于验证证明的人工核查分组。
 - `case_inventory.py`：声明清单、多种 pytest 标识、人工 Markdown 结果表、显式迁移别名和解析覆盖。
 - `evidence_context.py`：运行编号、workflow / 分支 / 平台范围的核对。
 - `closure_review.py`：可解析用例清单、逐项处理证据、关闭候选原因、未完成事项与目标版本核对。
@@ -76,13 +76,13 @@ python tools/update_report.py --cached tools/snapshots/YYYY-MM-DD.json --refresh
 
 ## 统计口径
 
-- 整体分布中的指标均为 issue 条数；关联 PR 的去重数量单列，不把一对多引用混作 PR 数量。
+- Issue 概览中的指标均为 issue 条数；关联 PR 的去重数量单列，不把一对多引用混作 PR 数量。
 - 关闭引用由 GitHub `closingIssuesReferences` 提供；普通交叉引用不计入关闭引用 PR 队列，也不能据其缺失断言没有修复。
 - 负责人字段和实际阻塞分开；没有 assignee、带 skipped 标签、较久没有人工评论均不自动证明阻塞。
 - `Unexpected success` 为测试预期需核对；`not implemented` 不自动代表新功能请求。
 - 发现渠道与问题影响分开；正确性和 regression 标签分开。
 - 技术范围、影响及记录性质是规则推断，未知不强行分类。范围不依赖旧快照。
-- 整体分布固定使用全部 issue；矩阵可切换数量和行内占比，未知列用中性灰。相同维度多选为 OR，不同维度为 AND。
+- Issue 概览固定使用全部未关闭 Issue；矩阵可切换数量和行内占比，未知列用中性灰。相同维度多选为 OR，不同维度为 AND。
 - 详情按需解析；完整正文和普通 PR 按需展示，评论每批 20 条。复制代码使用原始 Markdown 代码块，不把不连续的代码行拼成完整脚本。
 
 ## 浏览器检查
@@ -97,13 +97,13 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 
 可传入在线 URL 验证部署结果。自动检查覆盖多选、历史、矩阵数据、引用语义、懒加载、原文代码、导出分享及浅/深色可访问性，不针对手机端适配。
 
-## 关闭审查规则与回归
+## 关闭核查规则与回归
 
 仅聚合当前仍 open 的记录，候选按 issue 去重，原因允许重叠。关闭引用 PR 合并仅作为候选依据；普通 PR 引用不自动成为修复证明。逐项修复需关联已合并 PR，nightly 通过记录保留来源和平台，代理叙述、fix 指令及未来计划不作为完成证明。
 
 解析原文的 `op_ut`、`upstream_*` 清单、pytest 标识及用例表格，按模块、类、用例名去重；裸用例名只有在本 issue 中不歧义时才关联。删除线单列为待确认。标题声明数量不一致、部分清单和无法解析的条目均保留覆盖未知，不生成“全部完成”的结论。
 
-优先审查需完整清单及逐项处理证据，并且没有已提取的未完成事项。skip / xfail、目标 release 未确认、random / flaky、尚未确认清理的 Unexpected success 均需额外核对。专门保存 skip 原因的记录继续展示遗留任务。重复或转移候选需要核对目标确为 issue，并保留人工确认要求。
+优先核查需完整清单及逐项处理证据，并且没有已提取的未完成事项。skip / xfail、目标 release 未确认、random / flaky、尚未确认清理的 Unexpected success 均需额外核对。专门保存 skip 原因的记录继续展示遗留任务。重复或转移候选需要核对目标确为 issue，并保留人工确认要求。
 
 已关闭 issue 的 overrides 记录可继续保存在配置中，不参与当前 open 集合，也不阻断刷新。人工更正先于工程建议计算，避免继续沿用旧分类。
 
@@ -116,7 +116,7 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node tools/check_closure_browser.cjs
 ```
 
-新增检查覆盖关闭审查计数、排序、分享、逐项懒加载、已知正反例、输入与撤销竞争、多选图表、失效分享条件、剪贴板拒绝、PR 汇总和桌面偏好保存。
+新增检查覆盖关闭核查计数、排序、分享、逐项懒加载、已知正反例、输入与撤销竞争、多选图表、失效分享条件、剪贴板拒绝、PR 汇总和桌面偏好保存。
 
 ## 关联与证据校验补充
 
@@ -134,7 +134,7 @@ PLAYWRIGHT_MODULE=playwright AXE_MODULE=node_modules/axe-core/axe.min.js node to
 - 人工结果表的上标和 Markdown 脚注只附加到引用该注释的行。调整超时后通过、绕过收集错误后通过分别统计为 `conditional`、`workaround`，不计入无条件处理结论，不进入优先关闭。后续明确复测可更新状态。
 - 核对路径按构建、测试、一般问题区分。人工复测使用平台、版本 / commit 和命令证据，不强制要求 workflow；CI 记录继续核对原 workflow、分支与平台。构建问题使用参数、编译器与修复后构建结果，不以测试清单缺失判定覆盖。
 - `target_branch` 仅保留标题明确声明的 release 分支，与仓库原始 Milestone 分列；不将 UT Backlog 当作版本。`merged_fix_pr_count` 用于区分至少一个引用已合并和有合并且无进行中引用两组 issue，原筛选值保留以兼容分享。
-- 开发清单展示 `next_action` 与 `missing_evidence`；用例搜索和状态筛选只影响详情中的用例，重开其他 issue 时重置，不改变外层筛选或导出集合。
+- 未关闭 Issue 清单展示 `next_action` 与 `missing_evidence`；用例搜索和状态筛选只影响详情中的用例，重开其他 issue 时重置，不改变外层筛选或导出集合。
 
 团队工作流回归：
 

@@ -13,7 +13,7 @@ class MaintenanceWorkflowTests(unittest.TestCase):
         self.assertEqual(result['counts']['passed'],1)
         self.assertEqual(result['disposed'],1)
         self.assertTrue(result['candidate'])
-        self.assertNotEqual(result['status'],'优先审查关闭')
+        self.assertNotEqual(result['status'],'优先核查关闭')
         self.assertIn('600',result['cases'][0]['condition_note'])
         self.assertNotIn('600',result['cases'][1].get('condition_note',''))
 
@@ -59,7 +59,7 @@ class MaintenanceWorkflowTests(unittest.TestCase):
         c=comment('I re-checked test_one test_two: passed on BMG Linux; torch==2.15.0, pytest with --timeout 600.')
         result=review_issue(issue(CASES,[c],'[BMG][Linux] UT failures'),[])
         self.assertEqual(result['configuration']['status'],'已匹配公开配置字段')
-        self.assertEqual(result['status'],'优先审查关闭')
+        self.assertEqual(result['status'],'优先核查关闭')
         self.assertNotIn('原报告 workflow 未确认',result['configuration']['checks'])
         missing=review_issue(issue(CASES,[comment('test_one test_two passed on BMG Linux.')],'[BMG][Linux] UT failures'),[])
         self.assertIn('人工复测未注明 PyTorch / torch-xpu-ops 版本或 commit',missing['configuration']['checks'])
@@ -70,7 +70,7 @@ class MaintenanceWorkflowTests(unittest.TestCase):
         self.assertEqual(result['configuration']['kind'],'构建问题')
         self.assertTrue(any('USE_ONEMKL_XPU=OFF' in x for x in result['checks']))
         self.assertFalse(any('清单' in x or 'workflow 未确认' in x for x in result['checks']))
-        self.assertNotEqual(result['status'],'优先审查关闭')
+        self.assertNotEqual(result['status'],'优先核查关闭')
 
     def test_explicit_human_conclusion_does_not_claim_repository_role(self):
         self.assertEqual(evidence_source('I confirm this issue can be closed.'),'人工明确结论')

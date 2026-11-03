@@ -10,7 +10,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  const count=()=>page.evaluate(()=>compute().length),normalize=s=>s.toLowerCase();
  const expected=(person='',role='all',group='all')=>candidates.filter(r=>(!person&&role==='all'||r.review_people.some(p=>(!person||normalize(p.login)===normalize(person))&&(role==='all'||p.role===role)))&&(group==='all'||group==='pending'&&Number(r.team_review_rank)<2||['priority','confirm','blocked'].indexOf(group)===Number(r.team_review_rank)));
  assert.equal(await page.evaluate(()=>state.view),'closure');assert.equal(await count(),expected('','all','pending').length);assert.equal(await page.evaluate(()=>detailCache.size),0);assert.equal(data.schema_version,6);
- assert.match(await page.locator('#collectionInfo').innerText(),/PR 作者和当前 Review 请求补充于/);
+ assert.match(await page.locator('#collectionInfo').innerText(),/PR 作者和当前评审请求更新于/);
  const apply=async(person,role='all')=>{await page.locator('#teamPerson').fill(person);await page.locator('#teamRelation').selectOption(role);await page.locator('#teamPersonForm button[type=submit]').click();};
  // Actual PR author and requested reviewer relationships must work without assignment.
  for(const role of Object.keys(data.team_roles)){
@@ -41,6 +41,11 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  for(const query of ['relation=unknown','group=unknown']){await page.goto(base+'#v=4&view=closure&'+query,{waitUntil:'load'});assert.equal(await count(),0);assert(await page.locator('#restoreNotice').isVisible())}
  await page.goto(base+'#v=3',{waitUntil:'load'});assert.equal(await page.evaluate(()=>state.view),'developer');assert.equal(await count(),rows.length);
  await page.locator('[data-nav=closurePanel]').click();assert.equal(await page.evaluate(()=>state.view),'closure');assert(await page.locator('#teamPerson').isVisible());
+ // Older shared filter labels retain the same selection after renaming.
+ const legacyFilters=[['team_review_status','建议优先核对','建议优先核查'],['team_review_status','有关闭线索，需本人确认','有关闭线索，待确认'],['team_review_status','仍有明确未完成事项','仍有未完成事项'],['closure_status','优先审查关闭','优先核查关闭'],['pr_stage','等待审查','等待评审'],['pr_stage','审查请求修改','评审请求修改']];
+ for(const [key,oldName,newName] of legacyFilters){const view=key==='team_review_status'?'closure':'developer';await page.goto(base+'#v=4&view='+view+'&group=all&f.'+key+'='+encodeURIComponent(oldName),{waitUntil:'load'});assert.deepEqual(await page.evaluate(key=>state.filters[key],key),[newName]);const relevant=view==='closure'?candidates:rows;const matches=relevant.filter(r=>String(r[key]||'').split(/[;；]/).map(v=>v.trim()).includes(newName));assert.equal(await count(),matches.length,'legacy '+key+' '+oldName);assert.equal(new URLSearchParams(page.url().split('#')[1]).get('f.'+key),newName);if(!matches.length)assert(await page.locator('#restoreNotice').isVisible(),'missing values stay fail-closed')}
+ await page.goto(base+'#v=4&view=closure',{waitUntil:'load'});assert.deepEqual(await page.locator('.nav [data-nav]').allTextContents(),['关闭核查','Issue 概览','分布矩阵','处理队列','未关闭 Issue','数据说明']);assert.equal(await page.locator('#worklistTitle').innerText(),'关闭核查清单');
+
  // Whole report remains desktop friendly in both schemes and at supported widths.
  if(process.env.AXE_MODULE)await page.addScriptTag({path:process.env.AXE_MODULE});
  for(const scheme of ['light','dark']){await page.emulateMedia({colorScheme:scheme});for(const width of [1000,1280,1440,1920]){await page.setViewportSize({width,height:1000});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),scheme+' page overflow '+width)}

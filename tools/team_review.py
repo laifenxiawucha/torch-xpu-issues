@@ -1,8 +1,8 @@
 """People routing and human-review priority, separate from closing proof."""
 import re
 
-TEAM_STATES = ['建议优先核对', '有关闭线索，需本人确认', '仍有明确未完成事项']
-ROLE_LABELS = {'assignee': 'Issue 负责人', 'reporter': 'Issue 报告者', 'pr_author': '关联 PR 作者', 'reviewer': '被请求 Review'}
+TEAM_STATES = ['建议优先核查', '有关闭线索，待确认', '仍有未完成事项']
+ROLE_LABELS = {'assignee': 'Issue 负责人', 'reporter': 'Issue 报告者', 'pr_author': '关联 PR 作者', 'reviewer': 'PR 待评审人'}
 
 
 def people_for(issue, prs):
@@ -34,7 +34,7 @@ def review_summary(issue, closing, prs):
             reasons.append('正文已识别事项均标记处理')
         else:
             reasons.append('正文存在处理标记，范围待确认')
-        checks.append('请本人确认正文划线或勾选表示修复、skip、转移还是已不适用，并核对遗漏事项')
+        checks.append('请相关成员确认正文划线或勾选表示修复、skip、转移还是已不适用，并核对遗漏事项')
     if body['remaining']:
         blockers.append(f"正文清单仍有 {body['remaining']} 个未标记处理的事项")
     if re.search(r'(?i)don.?t close|do not close|keep (?:this issue )?open|不要关闭|勿关闭', issue['title']):
@@ -49,4 +49,4 @@ def review_summary(issue, closing, prs):
     return {'candidate': bool(reasons), 'status': TEAM_STATES[priority], 'rank': priority, 'reasons': reasons,
             'blockers': list(dict.fromkeys(blockers)), 'checks': list(dict.fromkeys(checks)),
             'people': people_for(issue, prs), 'body_summary': f"{body['marked']} / {body['total']} 个正文事项有处理标记" if body['total'] else '',
-            'question': '确认剩余事项后再判断是否关闭' if blockers else '请本人确认原问题是否已结束，以及是否可以关闭当前记录'}
+            'question': '确认剩余事项后再判断是否关闭' if blockers else '请相关成员确认原问题是否已结束，以及是否可以关闭当前记录'}

@@ -8,4 +8,4 @@
 
 评论同时保留原始 Markdown 与纯文本。`workflow_runs` 包含所引用公开运行记录的名称、workflow 路径、分支、commit 与可访问状态。整体运行结论不代替单个测试结果；运行记录不可访问或配置不匹配时保持待确认。
 
-当前快照还保留全部关联 PR 的 `author` 和 `reviewRequests`。人员字段随完整快照采集时使用 `fetched_at`；单独补充时另记 `people_fetched_at`，Issue / 正文快照时间保持不变。只有明确账号字段用于团队关系，Team Review 请求不转换成个人账号。地址清理保留紧邻 URL 的 Markdown 删除线或加粗结束标记，支持按相同语义重建正文事项。
+当前快照还保留全部关联 PR 的 `author` 和 `reviewRequests`。人员字段随完整快照采集时使用 `fetched_at`；单独补充时另记 `people_fetched_at`，Issue / 正文快照时间保持不变。只有明确账号字段用于团队关系，Team 评审请求不转换成个人账号。地址清理保留紧邻 URL 的 Markdown 删除线或加粗结束标记，支持按相同语义重建正文事项。

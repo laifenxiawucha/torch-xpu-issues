@@ -74,7 +74,7 @@ def verify(html,snapshot):
   assert r['target_branch']=='；'.join(dict.fromkeys(re.findall(r'\brelease/\d+\.\d+\b',r['title'],re.I)))
   assert r['next_action']
   assert (r['closure_candidate']=='1')==closure['candidate']==bool(closure['reasons'])
-  if closure['status']=='优先审查关闭':
+  if closure['status']=='优先核查关闭':
    assert closure['inventory_complete'] and closure['total']>0
    assert closure['disposed']==closure['total'] and not closure['blockers'] and not closure['counts']['skipped']
    assert not closure['configuration']['checks'],'Priority requires matching configuration evidence'

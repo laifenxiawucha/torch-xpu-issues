@@ -243,7 +243,7 @@ class ClosureReviewTests(unittest.TestCase):
     def test_matching_workflow_branch_and_hardware_can_be_prioritized(self):
         source=issue(CASES+'\nFound in https://github.com/intel/torch-xpu-ops/actions/runs/10',[comment('test_one test_two Passed in [nightly testing](https://github.com/intel/torch-xpu-ops/actions/runs/20) on BMG',bot=True)],'[BMG] failures')
         runs={f'intel/torch-xpu-ops@run:{n}':{'available':True,'path':'.github/workflows/nightly.yml','branch':'main'} for n in [10,20]}
-        self.assertEqual(review_issue(source,[],runs=runs)['status'],'优先审查关闭')
+        self.assertEqual(review_issue(source,[],runs=runs)['status'],'优先核查关闭')
 
 
 if __name__ == '__main__':

@@ -279,7 +279,7 @@ def review_issue(issue, linked, targets=None, runs=None):
     if configuration['checks']:
         cautions.extend(configuration['checks'])
     is_candidate = bool(reasons)
-    status = '存在未完成事项' if is_candidate and blockers else '优先审查关闭' if is_candidate and total and complete and disposed == total and not counts['skipped'] and not residual and not branch_unconfirmed and not expectation_unconfirmed and not flaky and configuration['status']=='已匹配公开配置字段' else '需要补充确认' if is_candidate else '暂无关闭候选依据'
+    status = '存在未完成事项' if is_candidate and blockers else '优先核查关闭' if is_candidate and total and complete and disposed == total and not counts['skipped'] and not residual and not branch_unconfirmed and not expectation_unconfirmed and not flaky and configuration['status']=='已匹配公开配置字段' else '需要补充确认' if is_candidate else '暂无关闭候选依据'
     unique = []
     seen = set()
     for item in sorted(evidence, key=lambda e: e.get('timestamp', e['date']), reverse=True):
